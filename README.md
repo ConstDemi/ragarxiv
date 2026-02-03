@@ -49,8 +49,15 @@ src/
 ├── 4chunking.ipynb          # Чанкование
 ├── 5embeddings.ipynb        # Генерация эмбеддингов и FAISS
 ├── 6db.ipynb                # Заливка обработнных данных в Qdrant
-├── 7RAG.ipynb               # Тестируем RAG в Jupyter Notebook
-└── 8get_random_chunks.ipynb #
+├── 7get_random_chunks.ipynb # Скрипт получения случайный чанков из Qdrant коллекции
+├── 8RAG.ipynb               # Тестируем RAG в Jupyter Notebook
+├── 9create_gd.ipynb         # Скрипт для создания эталонного датасета
+├── 10rag_validation.ipynb   # Валидационный тест с помощью RAGAS
+|
+├── data_recover.py          # Скрипт восстановления Qdrant коллекции
+├── rag_pipeline.py          # Класс RAG'а, импортируется в main.py
+├── main.py                  # Бэкенд RAG'а
+└── frontend.py              # Фронтенд RAG'а
 
 data/                        # Папка для данных, которые участвуют во всём пайплайне от парсинга arxiv до заливки в Qdrant
 ├── metadata/                # CSV с метаданными статей
@@ -58,7 +65,7 @@ data/                        # Папка для данных, которые у
 └── processed/               # Обработанные данные, который заливаются в Qdrant
 
 arXiv_Presentation.pptx      # Презентация к проекту (TBD)
-docker-compose.yaml          # Файл для сборки Qdrant контейнера
+docker-compose.yaml          # Файл-оркестратор
 requirements.txt             # Зависимости проекта
 ```
 
