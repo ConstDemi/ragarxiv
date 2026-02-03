@@ -68,7 +68,7 @@ app = FastAPI(
 # CORS для локальной разработки
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # В продакшене ограничить!
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -78,17 +78,8 @@ app.add_middleware(
 def read_root():
     return {
         "message": "Science RAG API is running",
-        "docs": "/docs",
-        "health": "/health"
+        "docs": "/docs"
     }
-
-@app.get("/health", response_model=HealthResponse, tags=["Health"])
-def health_check():
-    """Проверка статуса системы"""
-    return HealthResponse(
-        status="ok" if rag_system else "loading",
-        system_ready=rag_system is not None
-    )
 
 @app.post("/ask", response_model=QueryResponse, tags=["RAG"])
 def ask_question(request: QueryRequest):
