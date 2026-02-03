@@ -4,7 +4,7 @@ import requests
 st.set_page_config(page_title="Science RAG", layout="wide")
 st.title("arXiv Info System")
 
-# Константы
+# === КОНФИГ ===
 BACKEND_URL = "http://localhost:8000/ask"
 TIMEOUT = 600
 
@@ -12,7 +12,7 @@ with st.sidebar:
     st.header("⚙️ Settings")
     top_k = st.slider("Sources (Top-K)", 1, 10, 3)
 
-# История
+# История сообщений
 if "messages" not in st.session_state:
     st.session_state.messages = []
 
@@ -31,7 +31,7 @@ if prompt := st.chat_input("Ask about scientific papers..."):
     with st.chat_message("user"):
         st.markdown(prompt)
 
-    # 2. Получаем данные (Сетевой слой)
+    # 2. Получаем данные
     response_data = None
     error_message = None
 
@@ -58,7 +58,6 @@ if prompt := st.chat_input("Ask about scientific papers..."):
             except Exception as e:
                 error_message = f"❌ Unexpected error: {e}"
 
-            # 3. Рендеринг (UI слой) - строго вне try-except
             if error_message:
                 st.error(error_message)
             
@@ -79,7 +78,6 @@ if prompt := st.chat_input("Ask about scientific papers..."):
                 # Метаданные
                 st.caption(f"⏱️ {response_data.get('process_time', 0):.2f}s | 📄 {len(sources)} chunks")
 
-                # Сохраняем ТОЛЬКО текст ответа, чтобы не раздувать стейт
                 st.session_state.messages.append({
                     "role": "assistant", 
                     "content": answer

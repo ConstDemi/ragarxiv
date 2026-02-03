@@ -42,17 +42,17 @@ class HealthResponse(BaseModel):
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     global rag_system
-    logger.info("⏳ Starting RAG system...")
+    logger.info("Starting RAG system...")
     try:
         rag_system = ScienceRAG()
         logger.info("✅ RAG system ready!")
     except Exception as e:
-        logger.error(f"❌ Failed to initialize RAG: {e}")
+        logger.error(f"Failed to initialize RAG: {e}")
         raise
     
     yield
     
-    logger.info("🛑 Shutting down...")
+    logger.info("Shutting down...")
     # Очистка ресурсов при необходимости
     if rag_system:
         # Здесь можно добавить cleanup методы
