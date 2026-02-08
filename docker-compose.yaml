@@ -10,44 +10,6 @@ services:
     volumes:
       - qdrant_data:/qdrant/storage
     restart: unless-stopped
-    healthcheck:
-      test: ["CMD-SHELL", "curl -f http://localhost:6333/healthz || exit 1"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-
-  backend:
-    build: .
-    container_name: backend
-    ports:
-      - "8000:8000"
-    environment:
-      - QDRANT_HOST=qdrant
-      - QDRANT_PORT=6333
-    depends_on:
-      qdrant:
-        condition: service_healthy
-    restart: unless-stopped
-    command: python main.py
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: all
-              capabilities: [gpu]
-
-  frontend:
-    build: .
-    container_name: frontend
-    ports:
-      - "8501:8501"
-    environment:
-      - BACKEND_URL=http://backend:8000/ask
-    depends_on:
-      - backend
-    restart: unless-stopped
-    command: streamlit run frontend.py --server.address=0.0.0.0 --server.port=8501
 
 volumes:
   qdrant_data:
