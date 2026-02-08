@@ -1,0 +1,12 @@
+.git
+.dvc
+.vscode
+.idea
+data
+src/notebooks
+*.snapshot
+*.snapshot.dvc
+__pycache__
+*.pyc
+.env
+.env.local
