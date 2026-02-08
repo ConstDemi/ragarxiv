@@ -1,4 +1,3 @@
-import os
 import streamlit as st
 import requests
 
@@ -6,7 +5,7 @@ st.set_page_config(page_title="Science RAG", layout="wide")
 st.title("arXiv Info System")
 
 # === КОНФИГ ===
-BACKEND_URL = os.getenv("BACKEND_URL", "http://localhost:8000/ask")
+BACKEND_URL = "http://localhost:8000/ask"
 TIMEOUT = 600
 
 with st.sidebar:

@@ -1,5 +1,4 @@
 # rag_pipeline.py
-import os
 import torch
 import time
 import gc
@@ -16,9 +15,9 @@ logger = logging.getLogger(__name__)
 
 
 class ScienceRAG:
-    def __init__(self,
-                 qdrant_host: str = os.getenv("QDRANT_HOST", "localhost"),
-                 qdrant_port: int = int(os.getenv("QDRANT_PORT", "6333")),
+    def __init__(self, 
+                 qdrant_host: str = "localhost", 
+                 qdrant_port: int = 6333,
                  collection_name: str = "nlp2025_chunks",
                  embed_model: str = "Qwen/Qwen3-Embedding-0.6B",
                  llm_model: str = "Qwen/Qwen2.5-1.5B-Instruct"):
