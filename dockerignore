@@ -1,0 +1,13 @@
+data/
+src/notebooks/
+.git/
+.dvc/
+__pycache__/
+*.ipynb_checkpoints
+*.pyc
+.env
+qdrant_storage/
+qdrant.snapshot
+*.snapshot
+.vscode/
+.idea/

@@ -1,4 +1,5 @@
 # main.py
+import os
 import uvicorn
 import time
 import logging
@@ -44,7 +45,9 @@ async def lifespan(app: FastAPI):
     global rag_system
     logger.info("Starting RAG system...")
     try:
-        rag_system = ScienceRAG()
+        qdrant_host = os.environ.get("QDRANT_HOST", "localhost")
+        qdrant_port = int(os.environ.get("QDRANT_PORT", "6333"))
+        rag_system = ScienceRAG(qdrant_host=qdrant_host, qdrant_port=qdrant_port)
         logger.info("✅ RAG system ready!")
     except Exception as e:
         logger.error(f"Failed to initialize RAG: {e}")
@@ -53,9 +56,7 @@ async def lifespan(app: FastAPI):
     yield
     
     logger.info("Shutting down...")
-    # Очистка ресурсов при необходимости
     if rag_system:
-        # Здесь можно добавить cleanup методы
         pass
 
 app = FastAPI(
