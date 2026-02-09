@@ -5,7 +5,7 @@
 **Автор проекта:** [Демидов Константин](https://github.com/ConstDemi)  
 **Руководитель проекта:** [Паточенко Евгений](https://github.com/evgpat)
 
-**Статус проекта:** Production-Ready
+**Статус проекта:** Baseline-Ready + Docker image
 
 ## Технологический стек
 - LLM: `Qwen/Qwen2.5-1.5B-Instruct`
