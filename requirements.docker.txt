@@ -1,0 +1,10 @@
+--extra-index-url https://download.pytorch.org/whl/cu121
+
+torch
+sentence-transformers
+transformers
+qdrant-client
+fastapi
+uvicorn[standard]
+streamlit
+requests
