@@ -5,7 +5,7 @@
 **Автор проекта:** [Демидов Константин](https://github.com/ConstDemi)  
 **Руководитель проекта:** [Паточенко Евгений](https://github.com/evgpat)
 
-**Статус проекта:** Baseline
+**Статус проекта:** Production-Ready
 
 ## Технологический стек
 - LLM: `Qwen/Qwen2.5-1.5B-Instruct`
@@ -68,19 +68,20 @@ data/                        # Директория для всех данных
 ├── processed/               # Обработанные данные, который заливаются в Qdrant
 └── raw/                     # Сырые данные, требующие предобработки
 
-arXiv_Presentation.pptx      # Презентация к проекту (TBD)
+arXiv_Presentation.pptx      # Презентация к проекту
 docker-compose.yaml          # Файл-оркестратор
-requirements.txt             # Зависимости проекта
+requirements.docker.txt      # Зависимости
 ```
 
 
 ## Запускаем RAG:
 
 ### Предварительные требования
-- Python 3.11+
+- 8 VRAM
+- 20 GB свободного места на диске
 - Git
 - Docker
-- 20 GB свободного места на диске
+
 
 ### Шаг 1: Клонирование репозитория
 
@@ -109,3 +110,8 @@ docker compose up
 ```bash
 docker compose down
 ````
+
+
+Дополнительно:
+- Образ проекта на Docker Hub - https://hub.docker.com/r/constdemi/ragarxiv
+- Фреймворк RAGAS: https://docs.ragas.io/en/stable/ (Paper: https://arxiv.org/abs/2309.15217)
