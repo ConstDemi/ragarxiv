@@ -47,13 +47,13 @@ src/Jupyter Notebooks
 ├── 02_parse_data.ipynb             # Асинхронная скачка HTML статей
 ├── 03_preprocess_data.ipynb        # HTML -> Markdown
 ├── 04_chunking_data.ipynb          # Чанкование
-├── 05_embedding_data.ipynb         # Генерация эмбеддингов и FAISS
+├── 05_embedding_data.ipynb         # Генерация эмбеддингов
 ├── 06_creating_database.ipynb      # Заливка обработнных данных в Qdrant
 ├── 07_get_random_chunks.ipynb      # Скрипт получения случайный чанков из Qdrant коллекции
-├── 08_test_RAG.ipynb               # Тестируем RAG в Jupyter Notebook'
+├── 08_test_RAG.ipynb               # Тестируем RAG в Jupyter Notebook
 ├── 09_EDA.ipynb                    # Исследовательский анализ данных (EDA)
 ├── 10_filling_golden_dataset.ipynb # Скрипт для заполнения эталонного датасета ответами RAG-системы
-└── 11_validating_RAG.ipynb         # Валидационный тест с помощью RAGAS
+└── 11_validating_RAG.ipynb         # Валидационный тест с помощью RAGAS (Используются облачные GPU)
 
 src/app
 ├── data_recover.py          # Скрипт восстановления Qdrant коллекции
@@ -61,7 +61,7 @@ src/app
 ├── main.py                  # Бэкенд RAG'а
 └── frontend.py              # Фронтенд RAG'а
 
-data/                        # Директория для всех данных проекта
+data/                        # Директория для всех данных проекта (некоторые директории создаются в Juputer Notebooks)
 ├── eval/                    # Датасеты для валидации RAG'а
 ├── fig/                     # Графики
 ├── metadata/                # CSV с метаданными статей
@@ -83,54 +83,29 @@ requirements.txt             # Зависимости проекта
 - 20 GB свободного места на диске
 
 ### Шаг 1: Клонирование репозитория
+
 ```bash
-git clone https://github.com/ConstDemi/ArXiv_Info_System.git
+git clone https://github.com/ConstDemi/ArXiv_Info_System
 cd ArXiv_Info_System
 ```
 
-### Шаг 2: Установка зависимостей
+### Шаг 2: Скачиваем данные с S3
+
+1. Положите файл `config.local` в папку `.dvc/` (Файл предоставляется отдельно)
+
+2. Выполните команду `dvc pull` (Загрузка данных займёт некоторое время)
+
+
+### Шаг 3: Поднимаем контейнер
+
 ```bash
-pip install -r requirements.txt
+docker compose up
 ```
+При первом запуске контейнера подождите 5 минут пока подготовятся все сервисы
 
-### Шаг 3: Настройка доступа к S3 хранилищу
+Логи можно посмотреть командой `docker logs rag-app -f`
 
-1. Создайте файл `.dvc/config.local` на основе шаблона `.dvc/config.local.example`
-
-2. Отредактируйте `.dvc/config.local`, заполнив переменные предоставленными credentials (доступы от S3 хранилища).
-
-**Для членов комиссии:** credentials предоставляются отдельно.
-
-### Шаг 4: Загрузка датасета (там Qdrant снапшот)
+Выключить RAG можно командой
 ```bash
-dvc pull
-```
-
-### Шаг 5: Восстанавливаем снапшот Qdrant коллеции
-
-```bash
-docker compose up -d
-
-python ./src/app/data_recover.py
-```
-
-### Шаг 5: Запуск RAG системы (не закрывайте консоли во время работы RAG)
-
-Первая консоль:
-```bash
-python ./src/app/main.py
-```
-Вторая консоль:
-```bash
-streamlit run ./src/app/frontend.py
-```
-
-RAG запущен и ждёт вас по адресу `http://localhost:8501/`
-
-### Остановка RAG
-Для остановки RAG просто закройте две консоли и удалите Docker контейнер
-```bash
-docker compose down -v
+docker compose down
 ````
-
-Для повторного запуска повторите Шаг 5
