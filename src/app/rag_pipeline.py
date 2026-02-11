@@ -7,7 +7,7 @@ from typing import List, Dict, Optional
 from qdrant_client import QdrantClient
 from qdrant_client.models import Distance, VectorParams
 from sentence_transformers import SentenceTransformer
-from transformers import AutoTokenizer, AutoModelForCausalLM
+from transformers import AutoTokenizer, AutoModelForCausalLM, BitsAndBytesConfig
 
 # Настройка логирования
 logging.basicConfig(level=logging.INFO)
@@ -20,7 +20,7 @@ class ScienceRAG:
                  qdrant_port: int = 6333,
                  collection_name: str = "nlp2025_chunks",
                  embed_model: str = "Qwen/Qwen3-Embedding-0.6B",
-                 llm_model: str = "Qwen/Qwen2.5-1.5B-Instruct"):
+                 llm_model: str = "Qwen/Qwen2.5-3B-Instruct"):
         
         self.collection_name = collection_name
         self.device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -56,13 +56,39 @@ class ScienceRAG:
         logger.info(f"Loading LLM: {llm_model}...")
         self.tokenizer = AutoTokenizer.from_pretrained(llm_model)
         
-        self.model = AutoModelForCausalLM.from_pretrained(
-            llm_model,
-            dtype=torch.float16 if self.device == "cuda" else torch.float32,
-            attn_implementation="sdpa" if self.device == "cuda" else None,
-            low_cpu_mem_usage=True
-        ).to(self.device)
+        # Квантизация только для CUDA
+        if self.device == "cuda":
+            logger.info("Using 4-bit quantization (NF4)")
+            bnb_config = BitsAndBytesConfig(
+                load_in_4bit=True,
+                bnb_4bit_compute_dtype=torch.float16,
+                bnb_4bit_quant_type="nf4",
+                bnb_4bit_use_double_quant=True
+            )
+            
+            self.model = AutoModelForCausalLM.from_pretrained(
+                llm_model,
+                quantization_config=bnb_config,
+                device_map="auto",
+                attn_implementation="sdpa",
+                low_cpu_mem_usage=True
+            )
+        else:
+            # CPU fallback без квантизации
+            self.model = AutoModelForCausalLM.from_pretrained(
+                llm_model,
+                torch_dtype=torch.float32,
+                low_cpu_mem_usage=True
+            ).to(self.device)
+        
         logger.info(f"LLM loaded on {self.device.upper()}")
+        
+        # Логирование VRAM (только для CUDA)
+        if self.device == "cuda":
+            vram_allocated = torch.cuda.memory_allocated() / 1e9
+            vram_reserved = torch.cuda.memory_reserved() / 1e9
+            logger.info(f"VRAM allocated: {vram_allocated:.2f} GB")
+            logger.info(f"VRAM reserved: {vram_reserved:.2f} GB")
         
         logger.info("RAG system is ready.\n")
 
