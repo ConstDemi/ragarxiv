@@ -101,8 +101,13 @@ cd ArXiv_Info_System
 
 ### Шаг 3: Скачиваем образ и поднимаем контейнер
 
+Для тех кто с NVIDIA GPU:
 ```bash
-docker compose up
+docker compose --profile gpu up -d
+```
+CPU-only (Или MacOS):
+```bash
+docker compose --profile cpu up -d
 ```
 - Логи можно смотреть командой `docker logs rag-app -f`
 - При первом запуске контейнера подождите ~5 минут пока подготовятся все сервисы
