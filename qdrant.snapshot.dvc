@@ -1,5 +1,0 @@
-outs:
-- md5: 45babf532a0ad99966f56c4e2ddaf95b
-  size: 4108334080
-  hash: md5
-  path: qdrant.snapshot
