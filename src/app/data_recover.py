@@ -8,8 +8,9 @@ QDRANT_PORT = os.getenv("QDRANT_PORT", "6333")
 BASE_URL = f"http://{QDRANT_HOST}:{QDRANT_PORT}"
 COLLECTION_NAME = "nlp2025_chunks"
 
-# Путь к snapshot (внутри контейнера)
-SNAPSHOT_PATH = Path("/app/qdrant.snapshot")
+# Путь к snapshot (по умолчанию — корень репозитория; переопределяется через env SNAPSHOT_PATH)
+DEFAULT_SNAPSHOT = Path(__file__).resolve().parents[2] / "qdrant.snapshot"
+SNAPSHOT_PATH = Path(os.getenv("SNAPSHOT_PATH", str(DEFAULT_SNAPSHOT)))
 
 if not SNAPSHOT_PATH.exists():
     print(f"ERROR: Snapshot file not found at {SNAPSHOT_PATH}")

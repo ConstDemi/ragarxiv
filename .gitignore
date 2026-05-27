@@ -12,12 +12,6 @@
 /qdrant_snapshots
 qdrant_storage/
 
-# DVC
-.dvc/cache
-.dvc/tmp
-.dvc/plots
-.dvc/config.local
-
 # IDE
 .vscode/
 .idea/

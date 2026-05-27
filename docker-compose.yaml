@@ -1,18 +1,5 @@
-x-rag-base: &rag-base
-  image: constdemi/ragarxiv:latest
-  container_name: rag_app
-  ports:
-    - "8000:8000"
-    - "8501:8501"
-  volumes:
-    - ./qdrant.snapshot:/data/qdrant.snapshot:ro
-  environment:
-    - QDRANT_HOST=qdrant
-    - QDRANT_PORT=6333
-  depends_on:
-    - qdrant
-  restart: unless-stopped
-
+# Только Qdrant как внешняя зависимость.
+# Приложение (backend + frontend) запускается локально, см. README.
 services:
   qdrant:
     image: qdrant/qdrant:latest
@@ -22,23 +9,6 @@ services:
     volumes:
       - qdrant_data:/qdrant/storage
     restart: unless-stopped
-
-  rag-cpu:
-    <<: *rag-base
-    profiles:
-      - cpu
-
-  rag-gpu:
-    <<: *rag-base
-    profiles:
-      - gpu
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: 1
-              capabilities: [gpu]
 
 volumes:
   qdrant_data:
