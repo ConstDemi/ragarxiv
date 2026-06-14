@@ -1,3 +1,7 @@
+# Python
+__pycache__/
+*.py[cod]
+
 # Jupyter Notebook
 .ipynb_checkpoints/
 **/.ipynb_checkpoints/
@@ -20,3 +24,13 @@ qdrant_storage/
 *~
 
 /qdrant.snapshot
+
+# MLflow
+mlruns/
+mlflow.db
+
+# Claude Code
+.claude/
+
+# Scratch
+/other.ipynb

@@ -3,8 +3,19 @@
 torch
 sentence-transformers
 transformers
+accelerate
+bitsandbytes
 qdrant-client
 fastapi
 uvicorn[standard]
 streamlit
 requests
+pylatexenc
+
+# eval (RAGAS + Claude-судья)
+ragas
+datasets
+langchain-anthropic
+langchain-huggingface
+python-dotenv
+mlflow
