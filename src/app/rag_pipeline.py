@@ -1,17 +1,23 @@
 # rag_pipeline.py
 import torch
-import time
 import gc
 import logging
-from typing import List, Dict, Optional
+from typing import List, Dict, Any
 from qdrant_client import QdrantClient
-from qdrant_client.models import Distance, VectorParams
 from sentence_transformers import SentenceTransformer
 from transformers import AutoTokenizer, AutoModelForCausalLM, BitsAndBytesConfig
 
 # Настройка логирования
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+# Дефолтный системный промпт — используется, если не передан явно (например, из ноутбуков).
+# Для API источник правды — config.SYSTEM_PROMPT, он передаётся в конструктор из main.py.
+DEFAULT_SYSTEM_PROMPT = (
+    "You are a helpful scientific assistant with knowledge base of NLP arxiv paper for 2025 year. "
+    "Use ONLY the provided context to answer the user's question. "
+    "If the context doesn't contain enough information, say so explicitly"
+)
 
 
 class ScienceRAG:
@@ -20,9 +26,21 @@ class ScienceRAG:
                  qdrant_port: int = 6333,
                  collection_name: str = "nlp2025_chunks",
                  embed_model: str = "Qwen/Qwen3-Embedding-0.6B",
-                 llm_model: str = "Qwen/Qwen2.5-3B-Instruct"):
+                 llm_model: str = "Qwen/Qwen2.5-3B-Instruct",
+                 system_prompt: str = DEFAULT_SYSTEM_PROMPT,
+                 max_new_tokens: int = 2000,
+                 max_input_tokens: int = 4096,
+                 retrieve_k: int = 30,
+                 context_k: int = 10,
+                 max_papers: int = 8):
         
         self.collection_name = collection_name
+        self.system_prompt = system_prompt
+        self.max_new_tokens = max_new_tokens
+        self.max_input_tokens = max_input_tokens
+        self.retrieve_k = retrieve_k
+        self.context_k = context_k
+        self.max_papers = max_papers
         self.device = "cuda" if torch.cuda.is_available() else "cpu"
         logger.info(f"Initializing RAG on device: {self.device.upper()}")
 
@@ -92,13 +110,12 @@ class ScienceRAG:
         
         logger.info("RAG system is ready.\n")
 
-    def _retrieve(self, query: str, top_k: int) -> List[Dict]:
+    def _retrieve(self, query: str) -> List[Dict]:
         """
         Поиск релевантных документов в векторной базе.
         
         Args:
             query: Поисковый запрос
-            top_k: Количество результатов
             
         Returns:
             Список payload'ов найденных документов
@@ -107,6 +124,7 @@ class ScienceRAG:
             # Энкодинг запроса (на CPU)
             query_vector = self.encoder.encode(
                 query, 
+                prompt_name="query",  # query-инструкция Qwen3 (документы кодировались без неё)
                 convert_to_numpy=True,
                 show_progress_bar=False
             )
@@ -115,12 +133,15 @@ class ScienceRAG:
             search_result = self.client.query_points(
                 collection_name=self.collection_name,
                 query=query_vector.tolist(),
-                limit=top_k,
+                limit=self.retrieve_k,
                 with_payload=True,
                 with_vectors=False
             )
             
-            return [point.payload for point in search_result.points]
+            return [
+                {**(point.payload or {}), "score": point.score}
+                for point in search_result.points
+            ]
         
         except Exception as e:
             logger.error(f"Retrieval error: {e}")
@@ -153,40 +174,57 @@ class ScienceRAG:
         
         return formatted_text
 
-    def _extract_sources(self, chunks: List[Dict]) -> List[Dict[str, str]]:
+    def _group_sources(self, chunks: List[Dict]) -> List[Dict[str, Any]]:
         """
-        Извлечение источников для фронтенда.
-        
-        Args:
-            chunks: Список payload'ов
-            
-        Returns:
-            Список словарей с title и text
+        Группировка чанков по статье (doc_id) → список PaperSource.
+        Статьи упорядочены по лучшему (max) score; внутри статьи чанки —
+        по убыванию score (из Qdrant чанки приходят уже отсортированными).
+        Возвращается не более self.max_papers статей.
         """
-        sources = []
+        papers: Dict[str, Dict[str, Any]] = {}
+        order: List[str] = []
         for chunk in chunks:
-            text = chunk.get("text") or chunk.get("abstract") or chunk.get("content", "")
-            
-            sources.append({
-                "text": text
+            doc_id = chunk.get("doc_id", "")
+            if doc_id not in papers:
+                papers[doc_id] = {
+                    "doc_id": doc_id,
+                    "title": chunk.get("title", ""),
+                    "authors": chunk.get("authors", ""),
+                    "published": chunk.get("published", ""),
+                    "url": f"https://arxiv.org/abs/{doc_id}" if doc_id else "",
+                    "score": chunk.get("score", 0.0),  # первый встреченный чанк — лучший
+                    "chunks": [],
+                }
+                order.append(doc_id)
+            papers[doc_id]["chunks"].append({
+                "text": chunk.get("text", ""),
+                "score": chunk.get("score", 0.0),
+                "chunk_index": chunk.get("chunk_index", 0),
+                "header_1": chunk.get("header_1", ""),
+                "header_2": chunk.get("header_2", ""),
+                "header_3": chunk.get("header_3", ""),
             })
-        
-        return sources
 
-    def answer(self, query: str, top_k: int) -> Dict[str, any]:
+        return [papers[doc_id] for doc_id in order][: self.max_papers]
+
+    def search(self, query: str) -> List[Dict[str, Any]]:
+        """Только ретрив: статьи с релевантными пассажами, без генерации LLM."""
+        chunks = self._retrieve(query)
+        return self._group_sources(chunks)
+
+    def answer(self, query: str) -> Dict[str, Any]:
         """
         Главный метод: поиск + генерация ответа.
         
         Args:
             query: Вопрос пользователя
-            top_k: Количество источников
             
         Returns:
             Словарь с ключами 'answer' и 'sources'
         """
         
         # 1. Retrieval
-        retrieved_chunks = self._retrieve(query, top_k)
+        retrieved_chunks = self._retrieve(query)
         
         if not retrieved_chunks:
             logger.warning("No documents found")
@@ -195,21 +233,15 @@ class ScienceRAG:
                 "sources": []
             }
         
-        # 2. Подготовка источников для фронтенда
-        sources = self._extract_sources(retrieved_chunks)
-        
-        # 3. Формирование контекста
-        context = self._format_context(retrieved_chunks)
+        # 2. Группировка источников по статьям (для фронтенда)
+        sources = self._group_sources(retrieved_chunks)
+
+        # 3. Формирование контекста (топ-CONTEXT_K чанков, чтобы не раздувать промпт)
+        context = self._format_context(retrieved_chunks[:self.context_k])
         
         # 4. Подготовка промпта
-        system_prompt = (
-            "You are a helpful scientific assistant with knowledge base of NLP arxiv paper for 2025 year."
-            "Use ONLY the provided context to answer the user's question."
-            "If the context doesn't contain enough information, say so explicitly"
-        )
-        
         messages = [
-            {"role": "system", "content": system_prompt},
+            {"role": "system", "content": self.system_prompt},
             {"role": "user", "content": f"Context:\n{context}\n\nQuestion: {query}"}
         ]
 
@@ -225,13 +257,13 @@ class ScienceRAG:
                 [text_input], 
                 return_tensors="pt",
                 truncation=True,
-                max_length=4096
+                max_length=self.max_input_tokens
             ).to(self.device)
             
             with torch.no_grad():
                 generated_ids = self.model.generate(
                     **model_inputs,
-                    max_new_tokens=2000,
+                    max_new_tokens=self.max_new_tokens,
                     do_sample=False,
                     pad_token_id=self.tokenizer.eos_token_id
                 )
