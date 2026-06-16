@@ -15,7 +15,7 @@ COLLECTION_NAME = "nlp2025_chunks"
 
 # --- Models ---
 EMBED_MODEL = "Qwen/Qwen3-Embedding-0.6B"
-LLM_MODEL = "Qwen/Qwen2.5-3B-Instruct"
+LLM_MODEL = "Qwen/Qwen2.5-7B-Instruct"   # 7B 4-bit — выбран по eval: faithfulness 0.70→0.82 vs 3B (4-bit включается на CUDA)
 
 # --- Generation ---
 MAX_NEW_TOKENS = 2000    # максимальная длина ответа (в токенах)
@@ -30,5 +30,5 @@ SYSTEM_PROMPT = (
 # --- Eval (LLM-судья RAGAS) ---
 JUDGE_MODEL = "claude-opus-4-8"                   # дефолт; смоук гоняй на "claude-haiku-4-5"
 JUDGE_MAX_TOKENS = 4096                           # лимит ответа судьи
-GOLDEN_PATH = "data/eval/golden_pilot.parquet"    # относительно корня репозитория
+GOLDEN_PATH = "data/eval/golden_dataset50.parquet"  # 50 QA-пар (25 Q1 / 25 Q2), относительно корня репо
 EVAL_MAX_WORKERS = 4                              # параллелизм RAGAS; ниже = меньше 429 от Claude API

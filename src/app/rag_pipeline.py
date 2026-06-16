@@ -56,14 +56,14 @@ class ScienceRAG:
             )
         logger.info(f"Connected to Qdrant collection: {collection_name}")
         
-        # 2. Загрузка Encoder
+        # 2. Загрузка Encoder (на self.device — на 8GB GPU влезает рядом с 4-bit LLM; fp32 = как на CPU)
         logger.info(f"Loading retriever: {embed_model}...")
         self.encoder = SentenceTransformer(
-            embed_model, 
-            trust_remote_code=True, 
-            device="cpu"
+            embed_model,
+            trust_remote_code=True,
+            device=self.device
         )
-        logger.info("Retriever loaded on CPU")
+        logger.info(f"Retriever loaded on {self.device.upper()}")
         
         # Очистка перед загрузкой LLM
         gc.collect()
@@ -220,7 +220,8 @@ class ScienceRAG:
             query: Вопрос пользователя
             
         Returns:
-            Словарь с ключами 'answer' и 'sources'
+            Словарь с ключами 'answer', 'sources' и 'context_chunks'
+            (context_chunks — топ-context_k чанков, реально поданных в LLM)
         """
         
         # 1. Retrieval
@@ -230,14 +231,16 @@ class ScienceRAG:
             logger.warning("No documents found")
             return {
                 "answer": "I couldn't find any relevant information in the knowledge base.",
-                "sources": []
+                "sources": [],
+                "context_chunks": []
             }
         
         # 2. Группировка источников по статьям (для фронтенда)
         sources = self._group_sources(retrieved_chunks)
 
         # 3. Формирование контекста (топ-CONTEXT_K чанков, чтобы не раздувать промпт)
-        context = self._format_context(retrieved_chunks[:self.context_k])
+        context_chunks = retrieved_chunks[:self.context_k]   # ровно то, что увидит LLM
+        context = self._format_context(context_chunks)
         
         # 4. Подготовка промпта
         messages = [
@@ -282,14 +285,16 @@ class ScienceRAG:
             
             return {
                 "answer": response_text.strip(),
-                "sources": sources
+                "sources": sources,
+                "context_chunks": context_chunks
             }
         
         except Exception as e:
             logger.error(f"Generation error: {e}")
             return {
                 "answer": f"Error generating answer: {str(e)}",
-                "sources": sources
+                "sources": sources,
+                "context_chunks": context_chunks
             }
 
     def cleanup(self):

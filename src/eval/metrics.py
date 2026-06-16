@@ -2,6 +2,7 @@
 # RAGAS-метрики: судья Claude + эмбеддер Qwen3.
 # Модуль не зависит от config — имена моделей передаются из run.py.
 import _compat  # noqa: F401 — заглушка vertexai до импорта ragas
+import torch
 from langchain_anthropic import ChatAnthropic
 from langchain_huggingface import HuggingFaceEmbeddings
 from ragas.llms import LangchainLLMWrapper
@@ -15,8 +16,12 @@ def build_judge(model: str, max_tokens: int = 4096):
 
 
 def build_embeddings(model: str):
-    """Эмбеддер для AnswerRelevancy — локальный Qwen3 (без API)."""
-    return LangchainEmbeddingsWrapper(HuggingFaceEmbeddings(model_name=model))
+    """Эмбеддер для AnswerRelevancy — локальный Qwen3 (без API).
+    На GPU, если доступен: грузится ПОСЛЕ rag.cleanup(), т.е. VRAM уже свободна."""
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    return LangchainEmbeddingsWrapper(
+        HuggingFaceEmbeddings(model_name=model, model_kwargs={"device": device})
+    )
 
 
 def build_metrics(llm, emb):
