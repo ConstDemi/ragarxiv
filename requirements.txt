@@ -1,5 +1,5 @@
 # RAGarxiv — закреплённые зависимости снимка baseline v0.1.0.
-# Воспроизведено на: Python 3.10 / conda-env "ml" / CUDA 12.6 (Linux).
+# Целевое окружение: Python 3.10, CUDA 12.6.
 # torch — сборка cu126; для установки нужен индекс PyTorch ниже.
 --extra-index-url https://download.pytorch.org/whl/cu126
 
