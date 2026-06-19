@@ -1,5 +1,6 @@
-# config.py
-# Простые настройки проекта. Правятся прямо здесь (без env/.env).
+# config.py — единый конфиг проекта (app + eval + pipeline).
+# Простые настройки, правятся прямо здесь (без env/.env).
+# Импортируется плоско (`import config`) — потребители кладут src/ в sys.path.
 # Когда понадобится переопределять через окружение (например, в Docker) —
 # мигрируем на pydantic-settings.
 
@@ -12,6 +13,7 @@ MAX_PAPERS = 8     # сколько статей максимум возвращ
 QDRANT_HOST = "localhost"
 QDRANT_PORT = 6333
 COLLECTION_NAME = "nlp2025_chunks"
+VECTOR_SIZE = 1024     # размерность Qwen3-Embedding-0.6B; для создания коллекции (pipeline/06)
 
 # --- Models ---
 EMBED_MODEL = "Qwen/Qwen3-Embedding-0.6B"

@@ -6,8 +6,9 @@ import logging
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
-sys.path.insert(0, str(HERE))                          # для metrics
-sys.path.insert(0, str(HERE.parent / "app"))           # для config, rag_pipeline
+sys.path.insert(0, str(HERE))                          # для metrics, _compat
+sys.path.insert(0, str(HERE.parent / "app"))           # для rag_pipeline
+sys.path.insert(0, str(HERE.parent))                   # для config (src/, единый конфиг)
 
 from dotenv import load_dotenv
 load_dotenv(HERE.parent.parent / ".env")               # ANTHROPIC_API_KEY из .env в корне репо

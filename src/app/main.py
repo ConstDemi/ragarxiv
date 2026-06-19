@@ -1,9 +1,13 @@
 # main.py
+import sys
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 from fastapi import FastAPI
 from pydantic import BaseModel, Field
 
+# config вынесен в src/ (единый конфиг проекта) — кладём src/ в sys.path до импорта
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import config
 from rag_pipeline import ScienceRAG
 

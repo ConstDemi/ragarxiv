@@ -1,21 +1,34 @@
---extra-index-url https://download.pytorch.org/whl/cu121
+# RAGarxiv — закреплённые зависимости снимка baseline v0.1.0.
+# Воспроизведено на: Python 3.10 / conda-env "ml" / CUDA 12.6 (Linux).
+# torch — сборка cu126; для установки нужен индекс PyTorch ниже.
+--extra-index-url https://download.pytorch.org/whl/cu126
 
-torch
-sentence-transformers
-transformers
-accelerate
-bitsandbytes
-qdrant-client
-fastapi
-uvicorn[standard]
-streamlit
-requests
-pylatexenc
+torch==2.11.0+cu126
+sentence-transformers==5.5.0
+transformers==5.6.2
+accelerate==1.13.0
+bitsandbytes==0.49.2
+qdrant-client==1.18.0
+fastapi==0.136.3
+uvicorn[standard]==0.47.0
+requests==2.32.5
+pylatexenc==2.10
 
 # eval (RAGAS + Claude-судья)
-ragas
-datasets
-langchain-anthropic
-langchain-huggingface
-python-dotenv
-mlflow
+ragas==0.4.3
+datasets==4.8.4
+langchain-anthropic==1.4.6
+langchain-huggingface==1.2.2
+python-dotenv==1.2.2
+mlflow==3.12.0
+
+# pipeline (offline build корпуса: парсинг → markdown → чанки → эмбеддинги → Qdrant)
+arxiv==4.0.0
+httpx==0.28.1
+beautifulsoup4==4.14.3
+lxml==6.1.0
+markdownify==1.2.2
+langchain-text-splitters==1.1.2
+pyarrow==22.0.0
+numpy==2.2.6
+tqdm==4.67.3
