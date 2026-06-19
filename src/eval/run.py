@@ -46,11 +46,11 @@ def _to_scores(result) -> dict:
     return out
 
 
-def evaluate_config(limit=None, judge_model=None, **overrides):
+def evaluate_config(limit=None, **overrides):
     """Оценка одного конфига.
 
     overrides: llm_model / system_prompt / retrieve_k / context_k / max_papers.
-    judge_model: переопределить модель судьи (напр. 'claude-haiku-4-5' для смоука).
+    Модель судьи — ТОЛЬКО из config.JUDGE_MODEL (единый источник правды, без override).
     Предсказания пересчитываются под текущий конфиг; эталон фиксирован.
     """
     rag = ScienceRAG(
@@ -72,7 +72,7 @@ def evaluate_config(limit=None, judge_model=None, **overrides):
         golden = golden[:limit]
 
     print(f"\n[eval] конфиг: llm={overrides.get('llm_model', config.LLM_MODEL)} | "
-          f"judge={judge_model or config.JUDGE_MODEL} | "
+          f"judge={config.JUDGE_MODEL} | "
           f"retrieve_k={overrides.get('retrieve_k', config.RETRIEVE_K)} "
           f"context_k={overrides.get('context_k', config.CONTEXT_K)} "
           f"max_papers={overrides.get('max_papers', config.MAX_PAPERS)} | "
@@ -98,8 +98,8 @@ def evaluate_config(limit=None, judge_model=None, **overrides):
     rag.cleanup()
 
     print(f"[eval] генерация готова ({len(samples)} ответов) — запускаю RAGAS-судью "
-          f"({judge_model or config.JUDGE_MODEL}, max_workers={config.EVAL_MAX_WORKERS})...")
-    llm = build_judge(judge_model or config.JUDGE_MODEL, config.JUDGE_MAX_TOKENS)
+          f"({config.JUDGE_MODEL}, max_workers={config.EVAL_MAX_WORKERS})...")
+    llm = build_judge(config.JUDGE_MODEL, config.JUDGE_MAX_TOKENS)
     emb = build_embeddings(config.EMBED_MODEL)
     result = evaluate(
         dataset=Dataset.from_list(samples),
@@ -111,31 +111,71 @@ def evaluate_config(limit=None, judge_model=None, **overrides):
     # разрыв @retrieved − @context_k = потери на отсечке context_k (нужен reranker / больший context_k)
     scores["doc_recall_at_context_k"] = sum(hit_ctx) / len(hit_ctx)
     scores["doc_recall_at_retrieved"] = sum(hit_retr) / len(hit_retr)
-    return scores
+
+    # по-вопросные оценки: RAGAS уже посчитал их — это чтение result, БЕЗ новых вызовов судьи.
+    # колонки: user_input/response/retrieved_contexts/reference + 4 метрики. Дополняем doc_id и hit-флагами.
+    per_q = result.to_pandas()
+    per_q.insert(0, "q_index", range(len(per_q)))
+    per_q["doc_id"] = [row["doc_id"] for row in golden]
+    per_q["doc_hit_context_k"] = hit_ctx
+    per_q["doc_hit_retrieved"] = hit_retr
+    return scores, per_q
 
 
-def track_run(run_name, limit=None, judge_model=None, prompt_tag="default", **overrides):
-    """Прогон + лог в MLflow: params (конфиг) + metrics (4 скора). run_name — метка варианта."""
-    scores = evaluate_config(limit=limit, judge_model=judge_model, **overrides)
+def track_run(run_name, tags=None, limit=None, description="", **overrides):
+    """Прогон + лог в MLflow. Тонкий логгер: run_name и tags пишешь руками по конвенции
+    (имя = <axis>-<variant>-<ruler>; теги axis/variant/ruler/compare_to; status дописываешь в UI).
+    description — карточка в поле Description рана."""
+    scores, per_q = evaluate_config(limit=limit, **overrides)
+
+    # дамп по-вопросных оценок для диагностики (gitignored под data/) — и как артефакт MLflow
+    dump_path = GOLDEN.parent / f"per_question_{run_name}.parquet"
+    per_q.to_parquet(dump_path, index=False)
+
     with mlflow.start_run(run_name=run_name):
+        if tags:
+            mlflow.set_tags(tags)   # axis/variant/ruler/compare_to по конвенции; фильтруются в UI
         mlflow.log_params({
             "llm_model":   overrides.get("llm_model", config.LLM_MODEL),
-            "judge_model": judge_model or config.JUDGE_MODEL,
+            "judge_model": config.JUDGE_MODEL,
             "retrieve_k":  overrides.get("retrieve_k", config.RETRIEVE_K),
             "context_k":   overrides.get("context_k", config.CONTEXT_K),
             "max_papers":  overrides.get("max_papers", config.MAX_PAPERS),
-            "prompt_tag":  prompt_tag,
             "golden":      config.GOLDEN_PATH,
             "n":           limit if limit else "all",
             "judge_context": "context_k",   # судья видит контекст генерации, не весь retrieved (v2-методика)
         })
         mlflow.log_metrics(scores)
-    print(f"[eval] залогировано в MLflow: run '{run_name}' | {scores}")
+        mlflow.log_artifact(str(dump_path))
+        # точный промпт этого рана как артефакт — ран самодостаточен, даже если config позже изменится
+        mlflow.log_text(overrides.get("system_prompt", config.SYSTEM_PROMPT), "system_prompt.txt")
+        if description:
+            mlflow.set_tag("mlflow.note.content", description)   # поле Description на странице рана в UI
+
+    # консольная диагностика: худшие по faithfulness сверху (fa/ar/cp/cr)
+    worst = per_q.sort_values("faithfulness").head(8)
+    print(f"\n[eval] по-вопросные оценки -> {dump_path}")
+    print("[eval] худшие по faithfulness (fa/ar/cp/cr | вопрос):")
+    for _, r in worst.iterrows():
+        print(f"  #{int(r['q_index']):>2}  fa={r['faithfulness']:.2f} ar={r['answer_relevancy']:.2f} "
+              f"cp={r['context_precision']:.2f} cr={r['context_recall']:.2f} | {r['user_input'][:60]}")
+    print(f"\n[eval] залогировано в MLflow: run '{run_name}' | {scores}")
     return scores
 
 
 if __name__ == "__main__":
-    # эксперимент: генератор 7B (4-bit включается автоматически на CUDA), судья Haiku.
-    # config.LLM_MODEL (3B) не трогаем — 7B передаём оверрайдом; линейка та же (v2); run "7B-v2"
-    print(track_run("7B-v2", judge_model="claude-haiku-4-5",
-                    llm_model="Qwen/Qwen2.5-7B-Instruct"))
+    # Здесь пишешь ОДИН эксперимент под текущий прогон и запускаешь `python run.py`.
+    # Имя и теги — по конвенции: имя <axis>-<variant>-<ruler>; теги axis/variant/ruler/compare_to.
+    # Сейчас очереди нет (Фаза 0 закрыта) — вызов закомментирован, запуск ничего не логирует.
+    # Шаблон (раскомментируй и правь под эксперимент):
+    #
+    # print(track_run(
+    #     "prompt-xxx-v2",
+    #     tags={"axis": "prompt", "variant": "xxx", "ruler": "v2", "compare_to": "gen-7b-v2"},
+    #     description=(
+    #         "**Итог:** _(заполнить после)_\n\n---\n\n"
+    #         "**Изменение:** ...\n\n**База сравнения:** gen-7b-v2 ...\n\n"
+    #         "**Гипотеза:** ...\n\n**Ожидания:** ..."
+    #     ),
+    # ))
+    print("Нет активного эксперимента: впиши вызов track_run(...) в __main__ и запусти снова.")
