@@ -87,7 +87,7 @@ class ScienceRAG:
             self.model = AutoModelForCausalLM.from_pretrained(
                 llm_model,
                 quantization_config=bnb_config,
-                device_map="auto",
+                device_map={"": 0},   # вся модель на cuda:0; не влезла → OOM, без тихого CPU/RAM-оффлоада
                 attn_implementation="sdpa",
                 low_cpu_mem_usage=True
             )
