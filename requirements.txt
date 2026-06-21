@@ -22,6 +22,7 @@ mlflow==3.12.0
 litellm==1.85.0
 anthropic==0.103.1
 python-dotenv==1.2.2
+rank-bm25==0.2.2          # ретрив-A/B: BM25-гибрид в src/eval/retrieval_ab.py (реранкер — через sentence-transformers)
 
 # pipeline (offline build корпуса: парсинг → markdown → чанки → эмбеддинги → Qdrant)
 arxiv==4.0.0

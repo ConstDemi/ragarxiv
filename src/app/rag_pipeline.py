@@ -6,7 +6,7 @@ import gc
 import logging
 from typing import List, Dict, Any
 from qdrant_client import QdrantClient
-from sentence_transformers import SentenceTransformer
+from sentence_transformers import SentenceTransformer, CrossEncoder
 from threading import Thread
 from transformers import AutoTokenizer, AutoModelForCausalLM, BitsAndBytesConfig, TextIteratorStreamer
 
@@ -35,7 +35,10 @@ class ScienceRAG:
                  max_input_tokens: int = 4096,
                  retrieve_k: int = 30,
                  context_k: int = 10,
-                 max_papers: int = 8):
+                 max_papers: int = 8,
+                 rerank: bool = False,
+                 rerank_model: str = "BAAI/bge-reranker-v2-m3",
+                 rerank_pool: int = 50):
         
         self.collection_name = collection_name
         self.system_prompt = system_prompt
@@ -44,6 +47,9 @@ class ScienceRAG:
         self.retrieve_k = retrieve_k
         self.context_k = context_k
         self.max_papers = max_papers
+        self.rerank = rerank
+        self.rerank_pool = rerank_pool
+        self.reranker = None
         self.device = "cuda" if torch.cuda.is_available() else "cpu"
         logger.info(f"Initializing RAG on device: {self.device.upper()}")
 
@@ -67,6 +73,12 @@ class ScienceRAG:
             device=self.device
         )
         logger.info(f"Retriever loaded on {self.device.upper()}")
+
+        # Опциональный cross-encoder реранкер (по умолчанию выкл; ~1.1 ГБ VRAM — рядом с 7B на 8 ГБ не влезет)
+        if self.rerank:
+            logger.info(f"Loading reranker: {rerank_model}...")
+            self.reranker = CrossEncoder(rerank_model, device=self.device, max_length=512)
+            logger.info("Reranker loaded")
         
         # Очистка перед загрузкой LLM
         gc.collect()
@@ -132,19 +144,30 @@ class ScienceRAG:
                 show_progress_bar=False
             )
             
-            # Поиск в Qdrant
+            # Поиск в Qdrant (под реранк тянем больше кандидатов, потом обрежем до retrieve_k)
+            limit = self.rerank_pool if self.rerank else self.retrieve_k
             search_result = self.client.query_points(
                 collection_name=self.collection_name,
                 query=query_vector.tolist(),
-                limit=self.retrieve_k,
+                limit=limit,
                 with_payload=True,
                 with_vectors=False
             )
-            
-            return [
+            chunks = [
                 {**(point.payload or {}), "score": point.score}
                 for point in search_result.points
             ]
+
+            # Опциональный cross-encoder реранк: score → релевантность (заменяет cosine),
+            # пересортировка чанков, обрезка до retrieve_k (статья всплывает по лучшему чанку).
+            if self.rerank and self.reranker and chunks:
+                rs = self.reranker.predict([(query, c.get("text", "")) for c in chunks])
+                for c, s in zip(chunks, rs):
+                    c["score"] = float(s)
+                chunks.sort(key=lambda c: -c["score"])
+                chunks = chunks[:self.retrieve_k]
+
+            return chunks
         
         except Exception as e:
             logger.error(f"Retrieval error: {e}")

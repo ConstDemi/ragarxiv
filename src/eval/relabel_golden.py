@@ -34,6 +34,8 @@ REVIEW_PATH = ROOT / "data/eval/_relevance_review.json"
 WIP_PATH = ROOT / "data/eval/_relabel_wip.json"
 GOLDEN_OLD = ROOT / config.GOLDEN_PATH
 GOLDEN_NEW = ROOT / "data/eval/golden_dataset50_v2.parquet"
+HARD_WIP = ROOT / "data/eval/_harden_wip.json"
+GOLDEN_HARD = ROOT / "data/eval/golden_dataset50_hard.parquet"
 
 N_CANDIDATES = 15   # сколько различных статей на вопрос показываем разметчику
 SNIPPET = 280       # длина текстового фрагмента кандидата для LLM
@@ -241,6 +243,85 @@ def cmd_build(args):
     print(f"[build] мульти-релевантных вопросов: {multi}/{len(rows)}")
 
 
+# ───────────────────────── harden (трудные вопросы) ─────────────────────────
+SYS_HARDEN = (
+    "Ты усложняешь вопросы для стресс-теста поиска по статьям arXiv (NLP). "
+    "Отвечай СТРОГО одним JSON-объектом без пояснений и markdown."
+)
+
+
+def _harden_prompt(r: dict) -> str:
+    return f"""Исходный вопрос: {r['question']}
+Целевая статья (на неё вопрос и должен отвечать): {r.get('title','')}
+
+Перепиши вопрос так, чтобы он:
+1) звучал как естественный, косвенный вопрос исследователя (разговорно, не «по учебнику»);
+2) НЕ называл конкретные методы/датасеты/бенчмарки/модели/аббревиатуры из статьи — никаких имён-подсказок;
+3) оставался ОДНОЗНАЧНО ОТВЕЧАЕМЫМ той же статьёй: не про другое и не слишком общий;
+4) был на русском, одним предложением.
+
+Ответ строго JSON: {{"question_hard": "..."}}"""
+
+
+def _harden_one(r: dict, model: str) -> str:
+    import litellm
+    resp = litellm.completion(
+        model=model, max_tokens=512, temperature=0.3,
+        messages=[{"role": "system", "content": SYS_HARDEN},
+                  {"role": "user", "content": _harden_prompt(r)}],
+    )
+    try:
+        return str(_parse_json(resp.choices[0].message.content).get("question_hard", "")).strip()
+    except Exception as e:
+        print(f"  #{r.get('idx','?')} ПАРСИНГ FAILED ({e})")
+        return ""
+
+
+def cmd_harden(args):
+    from dotenv import load_dotenv
+    load_dotenv()
+    model = "anthropic/" + config.JUDGE_MODEL
+    rows = _load_golden(GOLDEN_OLD)
+    if args.limit:
+        rows = rows[:args.limit]
+    print(f"[harden] model={model} | вопросов: {len(rows)}")
+    out = []
+    for i, r in enumerate(rows):
+        hard = _harden_one({**r, "idx": i}, model)
+        out.append({"idx": i, "qtype": r.get("qtype", ""), "gold_doc_id": r["doc_id"],
+                    "gold_title": r.get("title", ""), "question_orig": r["question"],
+                    "question_hard": hard})
+        print(f"  #{i:>2} [{r.get('qtype','?')}] {hard[:72]}")
+    HARD_WIP.write_text(json.dumps(out, ensure_ascii=False, indent=2))
+    print(f"[harden] → {HARD_WIP}  (сверь orig→hard командой harden_review)")
+
+
+def cmd_harden_review(args):
+    wip = json.loads(HARD_WIP.read_text())
+    for w in wip:
+        print(f"#{w['idx']:>2} [{w['qtype']}]")
+        print(f"   orig: {w['question_orig']}")
+        print(f"   hard: {w['question_hard']}")
+    bad = [w["idx"] for w in wip if len(w["question_hard"]) < 10]
+    print(f"\n[harden_review] {len(wip)} вопросов" + (f" | ⚠️ подозрительные: {bad}" if bad else " | пустых нет"))
+    print(f"[harden_review] правь вручную {HARD_WIP} при необходимости, затем harden_build.")
+
+
+def cmd_harden_build(args):
+    import pyarrow as pa
+    import pyarrow.parquet as pq
+    wip = {w["idx"]: w for w in json.loads(HARD_WIP.read_text())}
+    rows = _load_golden(GOLDEN_OLD)
+    out = []
+    for i, r in enumerate(rows):
+        w = wip.get(i)
+        assert w and w["question_hard"], f"#{i}: нет hard-вопроса"
+        out.append({**r, "question_orig": r["question"], "question": w["question_hard"]})
+    pq.write_table(pa.Table.from_pylist(out), GOLDEN_HARD)
+    print(f"[harden_build] {len(out)} строк → {GOLDEN_HARD}")
+    print(f"[harden_build] колонки: {pa.Table.from_pylist(out).schema.names}")
+
+
 def main():
     ap = argparse.ArgumentParser(description="Переземление golden (линейка v4).")
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -251,9 +332,13 @@ def main():
                        help="ре-разметить только этот qtype поверх WIP (меняет только relevant_doc_ids)")
     sub.add_parser("review")
     sub.add_parser("build")
+    p_hard = sub.add_parser("harden")
+    p_hard.add_argument("--limit", type=int, default=None)
+    sub.add_parser("harden_review")
+    sub.add_parser("harden_build")
     args = ap.parse_args()
-    {"inventory": cmd_inventory, "label": cmd_label,
-     "review": cmd_review, "build": cmd_build}[args.cmd](args)
+    {"inventory": cmd_inventory, "label": cmd_label, "review": cmd_review, "build": cmd_build,
+     "harden": cmd_harden, "harden_review": cmd_harden_review, "harden_build": cmd_harden_build}[args.cmd](args)
 
 
 if __name__ == "__main__":

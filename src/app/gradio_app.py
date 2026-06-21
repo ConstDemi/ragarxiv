@@ -39,6 +39,7 @@ def build_rag():
         llm_model=config.LLM_MODEL, system_prompt=config.SYSTEM_PROMPT,
         max_new_tokens=config.MAX_NEW_TOKENS, max_input_tokens=config.MAX_INPUT_TOKENS,
         retrieve_k=config.RETRIEVE_K, context_k=config.CONTEXT_K, max_papers=config.MAX_PAPERS,
+        rerank=config.RERANK_ENABLED, rerank_model=config.RERANK_MODEL, rerank_pool=config.RERANK_POOL,
     )
 
 

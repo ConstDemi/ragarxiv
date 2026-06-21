@@ -54,6 +54,7 @@ def main():
           f"context_k={args.context_k} max_papers={args.max_papers} | вопросов: {len(golden)}")
 
     hit_ctx, hit_retr, hit_k, rr, ranks, misses, qtypes = [], [], [], [], [], [], []
+    paper_hits = {1: [], 3: [], 5: []}   # строгий k на уровне статей (headroom для реранкера)
     for i, row in enumerate(golden, 1):
         q = row["question"]
         golds = set(row.get("relevant_doc_ids") or [row["doc_id"]])        # мульти-релевантность (v2); фолбэк — single gold
@@ -71,6 +72,8 @@ def main():
             if c["doc_id"] not in seen:
                 seen.append(c["doc_id"])
         source_docs = set(seen[:args.max_papers])                          # топ-max_papers статей (как _group_sources)
+        for K in paper_hits:                                               # recall@1/3/5 — gold среди топ-K статей
+            paper_hits[K].append(bool(set(seen[:K]) & golds))
         all_docs = {c["doc_id"] for c in chunks}                           # любой из retrieve_k чанков
         gold_rank = next((j for j, c in enumerate(chunks, 1) if c["doc_id"] in golds), None)  # лучший ранг среди gold
 
@@ -89,6 +92,9 @@ def main():
     print(f"[doc_recall] @retrieved  (топ-{args.max_papers} статей)    = {sum(hit_retr)/n:.3f}  ({sum(hit_retr)}/{len(golden)})")
     print(f"[doc_recall] @retrieve_k (любой из {args.retrieve_k})    = {sum(hit_k)/n:.3f}  ({sum(hit_k)}/{len(golden)})   ← «нашли ли вообще»")
     print(f"[doc_recall] разрыв @retrieve_k − @retrieved = {(sum(hit_k)-sum(hit_retr))/n:.3f}  (ранжирование; >0 → может помочь reranker)")
+    print()
+    for K in (1, 3, 5):
+        print(f"[doc_recall] recall@{K} статей               = {sum(paper_hits[K])/n:.3f}  ({sum(paper_hits[K])}/{len(golden)})   ← строгий k (арена реранкера)")
     print(f"\n[doc_recall] MRR (gold; miss=0)            = {sum(rr)/n:.3f}   ← ГЛАВНАЯ для A/B ранжирования (чувствительна при n=50)")
     # разбивка по типу вопроса (qtype): Q1 существование vs Q2 метод
     if any(q in ("Q1", "Q2") for q in qtypes):

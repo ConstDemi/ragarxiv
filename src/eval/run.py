@@ -75,6 +75,8 @@ def evaluate_config(limit=None, scorers=None, **overrides):
         retrieve_k=overrides.get("retrieve_k", config.RETRIEVE_K),
         context_k=overrides.get("context_k", config.CONTEXT_K),
         max_papers=overrides.get("max_papers", config.MAX_PAPERS),
+        rerank=overrides.get("rerank", config.RERANK_ENABLED),
+        rerank_model=config.RERANK_MODEL, rerank_pool=config.RERANK_POOL,
     )
     rows, data = _dataset(limit)
 

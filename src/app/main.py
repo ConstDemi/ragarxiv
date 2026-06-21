@@ -29,6 +29,9 @@ async def lifespan(app: FastAPI):
         retrieve_k=config.RETRIEVE_K,
         context_k=config.CONTEXT_K,
         max_papers=config.MAX_PAPERS,
+        rerank=config.RERANK_ENABLED,
+        rerank_model=config.RERANK_MODEL,
+        rerank_pool=config.RERANK_POOL,
     )
     yield
     # Освобождаем ресурсы (VRAM) при остановке.
