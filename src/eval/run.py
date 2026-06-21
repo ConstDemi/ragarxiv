@@ -35,16 +35,20 @@ for _n in ("httpx", "anthropic", "litellm", "LiteLLM", "sentence_transformers", 
 
 
 def _dataset(limit=None):
-    """golden → формат mlflow.genai. expected_facts=[ground_truth] — грубая обёртка
-    (атомарные факты / мульти-релевантность — позже, #11). Возвращает (rows, data)."""
+    """golden (v2) → формат mlflow.genai. relevant_doc_ids — мульти-релевантность для doc_recall
+    (попадание = любой из них); expected_facts — атомарные факты для RetrievalSufficiency.
+    Фолбэк на старую single-gold схему. Возвращает (rows, data)."""
     rows = pq.read_table(GOLDEN).to_pylist()
     if limit:
         rows = rows[:limit]
     data = [
         # inputs.question → аргумент predict_fn; expectations → эталон для судей:
-        #   doc_id — для doc_recall; expected_facts — для RetrievalSufficiency
+        #   relevant_doc_ids — для doc_recall; expected_facts — для RetrievalSufficiency
         {"inputs": {"question": r["question"]},
-         "expectations": {"doc_id": r["doc_id"], "expected_facts": [r["ground_truth"]]}}
+         "expectations": {
+             "relevant_doc_ids": list(r.get("relevant_doc_ids") or [r["doc_id"]]),
+             "expected_facts": list(r.get("expected_facts") or [r["ground_truth"]]),
+         }}
         for r in rows
     ]
     return rows, data
@@ -152,14 +156,15 @@ if __name__ == "__main__":
     # Текущий эксперимент: v3-baseline (корпус 2021–2026, embed_text-коллекция, MLflow-eval).
     # Имя/теги по конвенции: <axis>-<variant>-<ruler> + теги axis/variant/ruler/compare_to.
     print(track_run(
-        "gen-7b-v3",
-        tags={"axis": "gen", "variant": "7b", "ruler": "v3", "compare_to": "gen-7b-v2"},
+        "gen-7b-v4",
+        tags={"axis": "gen", "variant": "7b", "ruler": "v4", "compare_to": "gen-7b-v3"},
         collection_name="nlp2021_2026_embedtext",
         description=(
             "**Итог:** _(заполнить после)_\n\n---\n\n"
-            "**Изменение:** корпус 2021–2026 + embed_text-эмбеддинги + MLflow GenAI eval "
-            "(RAGAS выпилен); max_input 4096→6144 (без обрезки контекста).\n\n"
-            "**База:** gen-7b-v2 (RAGAS/2025) — линейка сменилась, числа впрямую несравнимы.\n\n"
-            "**Golden:** 2025-заземлённый golden-50 (single-gold; переземление — #11)."
+            "**Изменение:** переземление golden под корпус 2021–2026 — мульти-релевантность "
+            "(relevant_doc_ids, 22/50 вопросов), атомарные expected_facts (5–6/вопрос), qtype.\n\n"
+            "**База:** gen-7b-v3 (та же система/корпус) — изменился ТОЛЬКО golden ⇒ линейка v3→v4; "
+            "судейские метрики впрямую несравнимы, doc_recall сравним.\n\n"
+            "**Golden:** golden_dataset50_v2 (24 Q1 / 26 Q2)."
         ),
     ))

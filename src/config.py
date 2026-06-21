@@ -36,5 +36,5 @@ SYSTEM_PROMPT = (
 # --- Eval (LLM-судья RAGAS) ---
 JUDGE_MODEL = "claude-haiku-4-5"                  # ЕДИНЫЙ источник модели судьи (run.py берёт только отсюда)
 JUDGE_MAX_TOKENS = 4096                           # лимит ответа судьи
-GOLDEN_PATH = "data/eval/golden_dataset50.parquet"  # 50 QA-пар (25 Q1 / 25 Q2), относительно корня репо
+GOLDEN_PATH = "data/eval/golden_dataset50_v2.parquet"  # 50 QA-пар (24 Q1 / 26 Q2); v2 — мульти-релевантность (relevant_doc_ids), атомарные expected_facts, qtype. Линейка eval v4. Старый single-gold golden_dataset50.parquet оставлен для воспроизводимости v3
 EVAL_MAX_WORKERS = 4                              # параллелизм RAGAS, параллелит jobs (кол-во метрик X кол-во вопросов); подбираем под лимиты запросов в Claude API

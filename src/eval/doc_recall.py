@@ -53,9 +53,11 @@ def main():
     print(f"[doc_recall] collection={args.collection} retrieve_k={args.retrieve_k} "
           f"context_k={args.context_k} max_papers={args.max_papers} | вопросов: {len(golden)}")
 
-    hit_ctx, hit_retr, hit_k, rr, ranks, misses = [], [], [], [], [], []
+    hit_ctx, hit_retr, hit_k, rr, ranks, misses, qtypes = [], [], [], [], [], [], []
     for i, row in enumerate(golden, 1):
-        q, gold = row["question"], row["doc_id"]
+        q = row["question"]
+        golds = set(row.get("relevant_doc_ids") or [row["doc_id"]])        # мульти-релевантность (v2); фолбэк — single gold
+        qt = row.get("qtype", "?")
         # зеркало ScienceRAG._retrieve: query-инструкция Qwen3, без нормализации (Cosine нормализует сам)
         vec = encoder.encode(q, prompt_name="query", convert_to_numpy=True, show_progress_bar=False)
         res = client.query_points(collection_name=args.collection, query=vec.tolist(),
@@ -70,23 +72,32 @@ def main():
                 seen.append(c["doc_id"])
         source_docs = set(seen[:args.max_papers])                          # топ-max_papers статей (как _group_sources)
         all_docs = {c["doc_id"] for c in chunks}                           # любой из retrieve_k чанков
-        gold_rank = next((j for j, c in enumerate(chunks, 1) if c["doc_id"] == gold), None)
+        gold_rank = next((j for j, c in enumerate(chunks, 1) if c["doc_id"] in golds), None)  # лучший ранг среди gold
 
-        hit_ctx.append(gold in ctx_docs)
-        hit_retr.append(gold in source_docs)
-        hit_k.append(gold in all_docs)
+        hit_ctx.append(bool(ctx_docs & golds))
+        hit_retr.append(bool(source_docs & golds))
+        hit_k.append(bool(all_docs & golds))
         rr.append(1.0 / gold_rank if gold_rank else 0.0)                   # reciprocal rank (miss=0)
         ranks.append(gold_rank)
-        if gold not in source_docs:
-            misses.append((i, q, gold, row.get("title", ""), gold_rank, chunks[:3]))
+        qtypes.append(qt)
+        if not (source_docs & golds):
+            misses.append((i, q, row["doc_id"], row.get("title", ""), gold_rank, chunks[:3]))
 
     n = len(golden) or 1
     found = [r for r in ranks if r]
     print(f"\n[doc_recall] @context_k  (топ-{args.context_k} чанков)   = {sum(hit_ctx)/n:.3f}  ({sum(hit_ctx)}/{len(golden)})")
-    print(f"[doc_recall] @retrieved  (топ-{args.max_papers} статей)    = {sum(hit_retr)/n:.3f}  ({sum(hit_retr)}/{len(golden)})   ← сравнимо с run.py v2")
+    print(f"[doc_recall] @retrieved  (топ-{args.max_papers} статей)    = {sum(hit_retr)/n:.3f}  ({sum(hit_retr)}/{len(golden)})")
     print(f"[doc_recall] @retrieve_k (любой из {args.retrieve_k})    = {sum(hit_k)/n:.3f}  ({sum(hit_k)}/{len(golden)})   ← «нашли ли вообще»")
     print(f"[doc_recall] разрыв @retrieve_k − @retrieved = {(sum(hit_k)-sum(hit_retr))/n:.3f}  (ранжирование; >0 → может помочь reranker)")
     print(f"\n[doc_recall] MRR (gold; miss=0)            = {sum(rr)/n:.3f}   ← ГЛАВНАЯ для A/B ранжирования (чувствительна при n=50)")
+    # разбивка по типу вопроса (qtype): Q1 существование vs Q2 метод
+    if any(q in ("Q1", "Q2") for q in qtypes):
+        for qt in ("Q1", "Q2"):
+            idxs = [j for j, x in enumerate(qtypes) if x == qt]
+            if idxs:
+                cc = sum(hit_ctx[j] for j in idxs) / len(idxs)
+                cr = sum(hit_retr[j] for j in idxs) / len(idxs)
+                print(f"[doc_recall] {qt}: @context_k={cc:.3f} @retrieved={cr:.3f}  (n={len(idxs)})")
     if found:
         print(f"[doc_recall] ранг gold (среди найденных)   : медиана={statistics.median(found):.0f} "
               f"среднее={sum(found)/len(found):.1f}  (найден в топ-{args.retrieve_k}: {len(found)}/{len(golden)})")
