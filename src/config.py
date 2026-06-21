@@ -12,7 +12,7 @@ MAX_PAPERS = 8     # сколько статей максимум возвращ
 # --- Qdrant ---
 QDRANT_HOST = "localhost"
 QDRANT_PORT = 6333
-COLLECTION_NAME = "nlp2021_2026_chunks"
+COLLECTION_NAME = "nlp2021_2026_embedtext"   # канон v0.2.0 — embed_text-эмбеддинги (выиграли по MRR); text-вариант nlp2021_2026_chunks оставлен для сравнения
 VECTOR_SIZE = 1024     # размерность Qwen3-Embedding-0.6B; для создания коллекции (pipeline/06)
 
 # --- Models ---
@@ -20,8 +20,8 @@ EMBED_MODEL = "Qwen/Qwen3-Embedding-0.6B"
 LLM_MODEL = "Qwen/Qwen2.5-7B-Instruct"   # 7B 4-bit — выбран по eval: faithfulness 0.70→0.82 vs 3B (4-bit включается на CUDA)
 
 # --- Generation ---
-MAX_NEW_TOKENS = 2000    # максимальная длина ответа (в токенах)
-MAX_INPUT_TOKENS = 8192  # предел токенов на вход; согласован с бюджетом context_k×chunk_size (10×512), чтобы все чанки доходили до LLM. Qwen2.5-7B держит 32K — это наш кап, не лимит модели
+MAX_NEW_TOKENS = 1024    # макс. длина ответа; снижено с 2000 → меньше пик KV-кэша на 8 ГБ (ответы Q1/Q2 короче)
+MAX_INPUT_TOKENS = 6144  # покрывает бюджет контекста (context_k×chunk_size=10×512) → без обрезки. На 8 ГБ влезает за счёт двухфазного eval (генерация отдельным циклом, не через autolog-течь evaluate)
 
 # Baseline-промпт (дефолт). Промпт-ось на 7B исчерпана и закрыта:
 #   prompt-grounded-v2 (4 правила блоком) → регресс (faithfulness 0.83→0.70, over-refusal + дрейф языка);

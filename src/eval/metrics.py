@@ -1,33 +1,48 @@
 # src/eval/metrics.py
-# RAGAS-метрики: судья Claude + эмбеддер Qwen3.
-# Модуль не зависит от config — имена моделей передаются из run.py.
-import _compat  # noqa: F401 — заглушка vertexai до импорта ragas
-import torch
-from langchain_anthropic import ChatAnthropic
-from langchain_huggingface import HuggingFaceEmbeddings
-from ragas.llms import LangchainLLMWrapper
-from ragas.embeddings import LangchainEmbeddingsWrapper
-from ragas.metrics import ContextPrecision, ContextRecall, Faithfulness, AnswerRelevancy
+# MLflow GenAI scorers (судья Claude через anthropic:/) + детерминированный custom doc_recall.
+# Без ragas/langchain — судьи встроенные в MLflow.
+from mlflow.entities import Feedback, SpanType
+from mlflow.genai.scorers import (
+    scorer,
+    RetrievalGroundedness,   # ≈ faithfulness: ответ обоснован retrieved-контекстом
+    RetrievalRelevance,      # ≈ context_precision: релевантность retrieved-доков запросу
+    RetrievalSufficiency,    # ≈ context_recall: контекст покрывает expected_facts
+    RelevanceToQuery,        # ≈ answer_relevancy: ответ адресует вопрос
+)
 
 
-def build_judge(model: str, max_tokens: int = 4096):
-    """LLM-судья на Claude. temperature НЕ передаём — Opus 4.8/4.7 её 400-ят."""
-    return LangchainLLMWrapper(ChatAnthropic(model=model, max_tokens=max_tokens, timeout=120))
+def judge_uri(model: str) -> str:
+    """config.JUDGE_MODEL (id) → провайдер-URI для MLflow-судьи."""
+    return model if "/" in model else f"anthropic:/{model}"
 
 
-def build_embeddings(model: str):
-    """Эмбеддер для AnswerRelevancy — локальный Qwen3 (без API).
-    На GPU, если доступен: грузится ПОСЛЕ rag.cleanup(), т.е. VRAM уже свободна."""
-    device = "cuda" if torch.cuda.is_available() else "cpu"
-    return LangchainEmbeddingsWrapper(
-        HuggingFaceEmbeddings(model_name=model, model_kwargs={"device": device})
-    )
+@scorer
+def doc_recall(expectations, trace):
+    """Детерминированный retrieval-recall (без судьи): gold doc_id среди Documents
+    RETRIEVER-спана (это top-context_k чанки, что видела LLM) → hit@context_k.
+
+    MLflow подставляет аргументы scorer'а ПО ИМЕНИ из доступного набора
+    (inputs / outputs / expectations / trace) — берём только нужные: expectations и trace.
+    Возврат Feedback(value=0/1); evaluate усредняет по вопросам → doc_recall/mean."""
+    gold = (expectations or {}).get("doc_id")
+    ids = []
+    for sp in (trace.search_spans(span_type=SpanType.RETRIEVER) if trace else []):
+        for d in (sp.outputs or []):
+            did = d.get("id") if isinstance(d, dict) else getattr(d, "id", None)
+            if did:
+                ids.append(did)
+    hit = gold in set(ids)
+    return Feedback(value=float(hit),
+                    rationale=f"gold={gold} {'∈' if hit else '∉'} {len(set(ids))} retrieved")
 
 
-def build_metrics(llm, emb):
+def build_scorers(judge_model: str):
+    """Список scorers для mlflow.genai.evaluate. judge_model — id из config.JUDGE_MODEL."""
+    j = judge_uri(judge_model)
     return [
-        ContextPrecision(llm=llm),
-        ContextRecall(llm=llm),
-        Faithfulness(llm=llm),
-        AnswerRelevancy(llm=llm, embeddings=emb),
+        RetrievalGroundedness(model=j),
+        RetrievalRelevance(model=j),
+        RetrievalSufficiency(model=j),
+        RelevanceToQuery(model=j),
+        doc_recall,
     ]

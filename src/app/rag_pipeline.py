@@ -1,4 +1,6 @@
 # rag_pipeline.py
+import os
+os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")  # меньше фрагментации VRAM на 8 ГБ
 import torch
 import gc
 import logging
@@ -278,9 +280,10 @@ class ScienceRAG:
                 skip_special_tokens=True
             )[0]
             
-            # Очистка GPU памяти после генерации
+            # Очистка GPU памяти после генерации (gc + empty_cache → меньше ползучего OOM на длинной серии)
             if self.device == "cuda":
                 del model_inputs, generated_ids
+                gc.collect()
                 torch.cuda.empty_cache()
             
             return {

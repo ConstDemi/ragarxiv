@@ -1,182 +1,165 @@
 # src/eval/run.py
-# Оценочный харнес: дёргает ScienceRAG НАПРЯМУЮ (не через HTTP API),
-# гоняет golden-набор и считает 4 метрики RAGAS (судья Claude, эмбеддер Qwen3).
+# Оценочный харнес на MLflow GenAI: дёргает ScienceRAG напрямую, гоняет golden,
+# судит встроенными MLflow-scorers (судья Claude через anthropic:/) + детерминированный doc_recall.
+# Без ragas/langchain (и без шима _compat).
+import os
+# ДО любого импорта (mlflow тянет torch раньше rag_pipeline) → флаг точно активен; меньше
+# фрагментации VRAM и ползучего OOM на длинной серии генераций на 8 ГБ.
+os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
+
 import sys
 import logging
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
-sys.path.insert(0, str(HERE))                          # для metrics, _compat
-sys.path.insert(0, str(HERE.parent / "app"))           # для rag_pipeline
-sys.path.insert(0, str(HERE.parent))                   # для config (src/, единый конфиг)
+sys.path.insert(0, str(HERE))                    # metrics
+sys.path.insert(0, str(HERE.parent / "app"))     # rag_pipeline
+sys.path.insert(0, str(HERE.parent))             # config
 
 from dotenv import load_dotenv
-load_dotenv(HERE.parent.parent / ".env")               # ANTHROPIC_API_KEY из .env в корне репо
+load_dotenv(HERE.parent.parent / ".env")         # ANTHROPIC_API_KEY из .env в корне репо
 
-import _compat  # noqa: F401 — заглушка vertexai ДО импорта ragas (ragas 0.4.3 ⟂ langchain 1.x)
 import pyarrow.parquet as pq
-from datasets import Dataset
-from ragas import evaluate
-from ragas.run_config import RunConfig
 import mlflow
+from mlflow.entities import Document, SpanType
 
 import config
 from rag_pipeline import ScienceRAG
-from metrics import build_judge, build_embeddings, build_metrics
+from metrics import build_scorers
 
 GOLDEN = HERE.parent.parent / config.GOLDEN_PATH
 mlflow.set_tracking_uri((HERE.parent.parent / "mlruns").as_uri())   # стор в корне репо
 
-# глушим шум сторонних логгеров (httpx-запросы, anthropic 429-ретраи), чтобы свои print были видны
-for _n in ("httpx", "anthropic", "sentence_transformers", "huggingface_hub"):
+for _n in ("httpx", "anthropic", "litellm", "LiteLLM", "sentence_transformers", "huggingface_hub"):
     logging.getLogger(_n).setLevel(logging.WARNING)
 
 
-def _to_scores(result) -> dict:
-    """RAGAS EvaluationResult -> dict[str, float] (под log_metrics).
-    _repr_dict — официальный агрегат RAGAS (safe_nanmean), совпадает с repr.
-    Фолбэк: вручную усредняем per-sample списки (result[metric])."""
-    repr_dict = getattr(result, "_repr_dict", None)
-    if repr_dict is not None:
-        return {k: float(v) for k, v in repr_dict.items()}
-    keys = ("context_precision", "context_recall", "faithfulness", "answer_relevancy")
-    out = {}
-    for k in keys:
-        vals = [x for x in result[k] if x is not None and x == x]  # x==x отсеивает NaN
-        out[k] = float(sum(vals) / len(vals)) if vals else float("nan")
-    return out
+def _dataset(limit=None):
+    """golden → формат mlflow.genai. expected_facts=[ground_truth] — грубая обёртка
+    (атомарные факты / мульти-релевантность — позже, #11). Возвращает (rows, data)."""
+    rows = pq.read_table(GOLDEN).to_pylist()
+    if limit:
+        rows = rows[:limit]
+    data = [
+        # inputs.question → аргумент predict_fn; expectations → эталон для судей:
+        #   doc_id — для doc_recall; expected_facts — для RetrievalSufficiency
+        {"inputs": {"question": r["question"]},
+         "expectations": {"doc_id": r["doc_id"], "expected_facts": [r["ground_truth"]]}}
+        for r in rows
+    ]
+    return rows, data
 
 
-def evaluate_config(limit=None, **overrides):
-    """Оценка одного конфига.
-
-    overrides: llm_model / system_prompt / retrieve_k / context_k / max_papers.
-    Модель судьи — ТОЛЬКО из config.JUDGE_MODEL (единый источник правды, без override).
-    Предсказания пересчитываются под текущий конфиг; эталон фиксирован.
-    """
+# --- Как устроен прогон: ДВУХФАЗНО (критично на 8 ГБ GPU) ---
+# mlflow.genai.evaluate гоняет predict_fn в НЕСКОЛЬКО потоков И включает auto-tracing, который
+# удерживает GPU-тензоры генерации → ползучий OOM (диагноз: простой цикл генерит 50 ровно на
+# 6.75 ГБ, а через evaluate память доползает до OOM ~на 13-м вопросе).
+# Поэтому: ФАЗА 1 — генерируем все ответы простым последовательным циклом (без evaluate → без
+# течи), кэшируем и ОСВОБОЖДАЕМ 7B. ФАЗА 2 — evaluate уже по кэшу: predict_fn без генерации,
+# только строит RETRIEVER-span для судей; autolog'у нечего держать, GPU свободна.
+def evaluate_config(limit=None, scorers=None, **overrides):
+    """Оценка одного конфига. Возвращает (rows, EvaluationResult).
+    overrides: collection_name / llm_model / system_prompt / retrieve_k / context_k / max_papers.
+    scorers: список scorer'ов (для дешёвого doc_recall-проба); по умолчанию — все судьи."""
+    collection = overrides.get("collection_name", config.COLLECTION_NAME)
     rag = ScienceRAG(
-        qdrant_host=config.QDRANT_HOST,
-        qdrant_port=config.QDRANT_PORT,
-        collection_name=config.COLLECTION_NAME,
-        embed_model=config.EMBED_MODEL,
+        qdrant_host=config.QDRANT_HOST, qdrant_port=config.QDRANT_PORT,
+        collection_name=collection, embed_model=config.EMBED_MODEL,
         llm_model=overrides.get("llm_model", config.LLM_MODEL),
         system_prompt=overrides.get("system_prompt", config.SYSTEM_PROMPT),
-        max_new_tokens=config.MAX_NEW_TOKENS,
-        max_input_tokens=config.MAX_INPUT_TOKENS,
+        max_new_tokens=config.MAX_NEW_TOKENS, max_input_tokens=config.MAX_INPUT_TOKENS,
         retrieve_k=overrides.get("retrieve_k", config.RETRIEVE_K),
         context_k=overrides.get("context_k", config.CONTEXT_K),
         max_papers=overrides.get("max_papers", config.MAX_PAPERS),
     )
+    rows, data = _dataset(limit)
 
-    golden = pq.read_table(GOLDEN).to_pylist()
-    if limit:
-        golden = golden[:limit]
+    # ФАЗА 1: генерация простым циклом (без mlflow.evaluate → без autolog-течи GPU). Кэшируем ответ+контекст.
+    print(f"[eval] коллекция={collection} | генерация {len(rows)} ответов (последовательно)...")
+    cache = {}
+    for i, r in enumerate(rows, 1):
+        res = rag.answer(query=r["question"])
+        cache[r["question"]] = {"answer": res["answer"], "ctx": res["context_chunks"]}
+        if i % 10 == 0:
+            print(f"[eval]   {i}/{len(rows)}")
+    rag.cleanup()   # освобождаем 7B/эмбеддер: фаза судей — это Claude API, GPU не нужна
 
-    print(f"\n[eval] конфиг: llm={overrides.get('llm_model', config.LLM_MODEL)} | "
-          f"judge={config.JUDGE_MODEL} | "
-          f"retrieve_k={overrides.get('retrieve_k', config.RETRIEVE_K)} "
-          f"context_k={overrides.get('context_k', config.CONTEXT_K)} "
-          f"max_papers={overrides.get('max_papers', config.MAX_PAPERS)} | "
-          f"вопросов: {len(golden)}")
+    # ФАЗА 2: predict_fn БЕЗ генерации — отдаёт кэш и строит RETRIEVER-span (для RAG-судей и doc_recall).
+    #   Document.id = doc_id; span = top-context_k (что видела LLM, v2-методика).
+    @mlflow.trace
+    def predict_fn(question):
+        c = cache[question]
+        with mlflow.start_span(name="retrieve", span_type=SpanType.RETRIEVER) as s:
+            s.set_inputs({"query": question})
+            s.set_outputs([
+                Document(id=x.get("doc_id", ""), page_content=x.get("text", ""),
+                         metadata={"title": x.get("title", ""), "score": x.get("score")})
+                for x in c["ctx"]
+            ])
+        return {"response": c["answer"]}
 
-    samples = []
-    hit_ctx, hit_retr = [], []   # точное doc_id-попадание (бесплатный retrieval-recall, без Claude)
-    for i, row in enumerate(golden, 1):
-        print(f"[eval] генерация {i}/{len(golden)}: {row['question'][:70]}")
-        res = rag.answer(query=row["question"])
-        samples.append({
-            # имена колонок — RAGAS v1.0; на старой версии: question/answer/contexts/ground_truth
-            "user_input": row["question"],
-            "response": res["answer"],
-            # судье отдаём РОВНО то, что видела LLM (context_k чанков), а не все ~retrieve_k:
-            # дешевле (меньше токенов и per-chunk вызовов) и корректнее для faithfulness
-            "retrieved_contexts": [c["text"] for c in res["context_chunks"]],
-            "reference": row["ground_truth"],
-        })
-        gold = row["doc_id"]
-        hit_ctx.append(gold in {c["doc_id"] for c in res["context_chunks"]})   # @context_k: что видела LLM
-        hit_retr.append(gold in {s["doc_id"] for s in res["sources"]})         # @retrieved: статьи в выдаче
-    rag.cleanup()
-
-    print(f"[eval] генерация готова ({len(samples)} ответов) — запускаю RAGAS-судью "
-          f"({config.JUDGE_MODEL}, max_workers={config.EVAL_MAX_WORKERS})...")
-    llm = build_judge(config.JUDGE_MODEL, config.JUDGE_MAX_TOKENS)
-    emb = build_embeddings(config.EMBED_MODEL)
-    result = evaluate(
-        dataset=Dataset.from_list(samples),
-        metrics=build_metrics(llm, emb),
-        run_config=RunConfig(max_workers=config.EVAL_MAX_WORKERS),  # душим параллелизм → меньше 429
+    print(f"[eval] судья={config.JUDGE_MODEL} → scorers (Claude API)...")
+    result = mlflow.genai.evaluate(
+        data=data, predict_fn=predict_fn,
+        scorers=scorers if scorers is not None else build_scorers(config.JUDGE_MODEL),
     )
-    scores = _to_scores(result)
-    # детерминированный retrieval-recall по doc_id (без вызовов Claude);
-    # разрыв @retrieved − @context_k = потери на отсечке context_k (нужен reranker / больший context_k)
-    scores["doc_recall_at_context_k"] = sum(hit_ctx) / len(hit_ctx)
-    scores["doc_recall_at_retrieved"] = sum(hit_retr) / len(hit_retr)
-
-    # по-вопросные оценки: RAGAS уже посчитал их — это чтение result, БЕЗ новых вызовов судьи.
-    # колонки: user_input/response/retrieved_contexts/reference + 4 метрики. Дополняем doc_id и hit-флагами.
-    per_q = result.to_pandas()
-    per_q.insert(0, "q_index", range(len(per_q)))
-    per_q["doc_id"] = [row["doc_id"] for row in golden]
-    per_q["doc_hit_context_k"] = hit_ctx
-    per_q["doc_hit_retrieved"] = hit_retr
-    return scores, per_q
+    return rows, result
 
 
 def track_run(run_name, tags=None, limit=None, description="", **overrides):
-    """Прогон + лог в MLflow. Тонкий логгер: run_name и tags пишешь руками по конвенции
-    (имя = <axis>-<variant>-<ruler>; теги axis/variant/ruler/compare_to; status дописываешь в UI).
-    description — карточка в поле Description рана."""
-    scores, per_q = evaluate_config(limit=limit, **overrides)
-
-    # дамп по-вопросных оценок для диагностики (gitignored под data/) — и как артефакт MLflow
-    dump_path = GOLDEN.parent / f"per_question_{run_name}.parquet"
-    per_q.to_parquet(dump_path, index=False)
-
-    with mlflow.start_run(run_name=run_name):
+    """Прогон + лог в MLflow под именем/тегами по конвенции (<axis>-<variant>-<ruler>)
+    + per-question дамп. mlflow.genai.evaluate логирует метрики/трейсы в активный run."""
+    collection = overrides.get("collection_name", config.COLLECTION_NAME)
+    # открываем run заранее (имя/теги/параметры по конвенции); evaluate внутри логирует
+    # метрики и трейсы в этот же активный run
+    with mlflow.start_run(run_name=run_name) as run:
         if tags:
-            mlflow.set_tags(tags)   # axis/variant/ruler/compare_to по конвенции; фильтруются в UI
+            mlflow.set_tags(tags)
         mlflow.log_params({
-            "llm_model":   overrides.get("llm_model", config.LLM_MODEL),
+            "llm_model": overrides.get("llm_model", config.LLM_MODEL),
             "judge_model": config.JUDGE_MODEL,
-            "retrieve_k":  overrides.get("retrieve_k", config.RETRIEVE_K),
-            "context_k":   overrides.get("context_k", config.CONTEXT_K),
-            "max_papers":  overrides.get("max_papers", config.MAX_PAPERS),
-            "golden":      config.GOLDEN_PATH,
-            "n":           limit if limit else "all",
-            "judge_context": "context_k",   # судья видит контекст генерации, не весь retrieved (v2-методика)
+            "collection": collection,
+            "retrieve_k": overrides.get("retrieve_k", config.RETRIEVE_K),
+            "context_k": overrides.get("context_k", config.CONTEXT_K),
+            "max_papers": overrides.get("max_papers", config.MAX_PAPERS),
+            "golden": config.GOLDEN_PATH,
+            "n": limit if limit else "all",
         })
-        mlflow.log_metrics(scores)
-        mlflow.log_artifact(str(dump_path))
-        # точный промпт этого рана как артефакт — ран самодостаточен, даже если config позже изменится
-        mlflow.log_text(overrides.get("system_prompt", config.SYSTEM_PROMPT), "system_prompt.txt")
         if description:
-            mlflow.set_tag("mlflow.note.content", description)   # поле Description на странице рана в UI
+            mlflow.set_tag("mlflow.note.content", description)
 
-    # консольная диагностика: худшие по faithfulness сверху (fa/ar/cp/cr)
-    worst = per_q.sort_values("faithfulness").head(8)
-    print(f"\n[eval] по-вопросные оценки -> {dump_path}")
-    print("[eval] худшие по faithfulness (fa/ar/cp/cr | вопрос):")
-    for _, r in worst.iterrows():
-        print(f"  #{int(r['q_index']):>2}  fa={r['faithfulness']:.2f} ar={r['answer_relevancy']:.2f} "
-              f"cp={r['context_precision']:.2f} cr={r['context_recall']:.2f} | {r['user_input'][:60]}")
-    print(f"\n[eval] залогировано в MLflow: run '{run_name}' | {scores}")
-    return scores
+        rows, result = evaluate_config(limit=limit, **overrides)
+        mlflow.log_metrics({k: float(v) for k, v in result.metrics.items()})
+
+        # per-question дамп (gitignored под data/) + артефакт.
+        # result_df несёт объекты-трейсы/assessments → parquet их не сериализует;
+        # берём только оценки (*/value) + запрос/ответ и стрингуем.
+        df = result.result_df.copy()
+        df.insert(0, "gold_doc_id", [r["doc_id"] for r in rows])
+        keep = (["gold_doc_id"]
+                + [c for c in df.columns if c.endswith("/value")]
+                + [c for c in ("request", "response") if c in df.columns])
+        dump = GOLDEN.parent / f"per_question_{run_name}.parquet"
+        df[keep].astype(str).to_parquet(dump, index=False)
+        mlflow.log_artifact(str(dump))
+
+    print(f"\n[eval] {run_name} | {result.metrics}")
+    print(f"[eval] per-question → {dump}")
+    return result.metrics
 
 
 if __name__ == "__main__":
-    # Здесь пишешь ОДИН эксперимент под текущий прогон и запускаешь `python run.py`.
-    # Имя и теги — по конвенции: имя <axis>-<variant>-<ruler>; теги axis/variant/ruler/compare_to.
-    # Сейчас очереди нет (Фаза 0 закрыта) — вызов закомментирован, запуск ничего не логирует.
-    # Шаблон (раскомментируй и правь под эксперимент):
-    #
-    # print(track_run(
-    #     "prompt-xxx-v2",
-    #     tags={"axis": "prompt", "variant": "xxx", "ruler": "v2", "compare_to": "gen-7b-v2"},
-    #     description=(
-    #         "**Итог:** _(заполнить после)_\n\n---\n\n"
-    #         "**Изменение:** ...\n\n**База сравнения:** gen-7b-v2 ...\n\n"
-    #         "**Гипотеза:** ...\n\n**Ожидания:** ..."
-    #     ),
-    # ))
-    print("Нет активного эксперимента: впиши вызов track_run(...) в __main__ и запусти снова.")
+    # Текущий эксперимент: v3-baseline (корпус 2021–2026, embed_text-коллекция, MLflow-eval).
+    # Имя/теги по конвенции: <axis>-<variant>-<ruler> + теги axis/variant/ruler/compare_to.
+    print(track_run(
+        "gen-7b-v3",
+        tags={"axis": "gen", "variant": "7b", "ruler": "v3", "compare_to": "gen-7b-v2"},
+        collection_name="nlp2021_2026_embedtext",
+        description=(
+            "**Итог:** _(заполнить после)_\n\n---\n\n"
+            "**Изменение:** корпус 2021–2026 + embed_text-эмбеддинги + MLflow GenAI eval "
+            "(RAGAS выпилен); max_input 4096→6144 (без обрезки контекста).\n\n"
+            "**База:** gen-7b-v2 (RAGAS/2025) — линейка сменилась, числа впрямую несравнимы.\n\n"
+            "**Golden:** 2025-заземлённый golden-50 (single-gold; переземление — #11)."
+        ),
+    ))

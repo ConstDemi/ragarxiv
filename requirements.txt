@@ -1,4 +1,4 @@
-# RAGarxiv — закреплённые зависимости снимка baseline v0.1.0.
+# RAGarxiv — закреплённые зависимости (снимок v0.2.0).
 # Целевое окружение: Python 3.10, CUDA 12.6.
 # torch — сборка cu126; для установки нужен индекс PyTorch ниже.
 --extra-index-url https://download.pytorch.org/whl/cu126
@@ -14,16 +14,15 @@ uvicorn[standard]==0.47.0
 requests==2.32.5
 pylatexenc==2.10
 
-# eval (RAGAS + Claude-судья)
-ragas==0.4.3
-datasets==4.8.4
-langchain-anthropic==1.4.6
-langchain-huggingface==1.2.2
-python-dotenv==1.2.2
+# eval (MLflow GenAI + судья Claude через litellm)
 mlflow==3.12.0
+litellm==1.85.0
+anthropic==0.103.1
+python-dotenv==1.2.2
 
 # pipeline (offline build корпуса: парсинг → markdown → чанки → эмбеддинги → Qdrant)
 arxiv==4.0.0
+datasets==4.8.4
 httpx==0.28.1
 beautifulsoup4==4.14.3
 lxml==6.1.0
