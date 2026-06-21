@@ -7,7 +7,8 @@ import logging
 from typing import List, Dict, Any
 from qdrant_client import QdrantClient
 from sentence_transformers import SentenceTransformer
-from transformers import AutoTokenizer, AutoModelForCausalLM, BitsAndBytesConfig
+from threading import Thread
+from transformers import AutoTokenizer, AutoModelForCausalLM, BitsAndBytesConfig, TextIteratorStreamer
 
 # Настройка логирования
 logging.basicConfig(level=logging.INFO)
@@ -214,6 +215,18 @@ class ScienceRAG:
         chunks = self._retrieve(query)
         return self._group_sources(chunks)
 
+    def _build_messages(self, context: str, query: str) -> List[Dict[str, str]]:
+        """Чат-сообщения для модели. Директива языка/длины — в КОНЦЕ user-сообщения (не в system):
+        Qwen2.5-7B так слушает надёжнее → лечит дрейф в англ/кит и обрыв ответа на русском вопросе.
+        Используется и answer() (eval/API), и answer_stream() (UI) — единый промпт."""
+        return [
+            {"role": "system", "content": self.system_prompt},
+            {"role": "user", "content": (
+                f"Context:\n{context}\n\nQuestion: {query}\n\n"
+                "Ответь на русском языке, развёрнуто и по существу, опираясь только на контекст выше."
+            )},
+        ]
+
     def answer(self, query: str) -> Dict[str, Any]:
         """
         Главный метод: поиск + генерация ответа.
@@ -245,10 +258,7 @@ class ScienceRAG:
         context = self._format_context(context_chunks)
         
         # 4. Подготовка промпта
-        messages = [
-            {"role": "system", "content": self.system_prompt},
-            {"role": "user", "content": f"Context:\n{context}\n\nQuestion: {query}"}
-        ]
+        messages = self._build_messages(context, query)
 
         # 5. Генерация ответа
         try:
@@ -299,6 +309,43 @@ class ScienceRAG:
                 "sources": sources,
                 "context_chunks": context_chunks
             }
+
+    def answer_stream(self, query: str):
+        """Потоковая версия для UI: yield (накопленный_текст, sources) по мере генерации.
+        eval/API её НЕ зовут (они используют answer()) → бейзлайн не затрагивается.
+        Память как у answer() — те же проходы модели, просто токены отдаются по мере готовности."""
+        retrieved = self._retrieve(query)
+        if not retrieved:
+            yield "Не нашёл релевантных документов в базе знаний.", []
+            return
+        sources = self._group_sources(retrieved)
+        context = self._format_context(retrieved[:self.context_k])
+        messages = self._build_messages(context, query)
+
+        text_input = self.tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
+        model_inputs = self.tokenizer([text_input], return_tensors="pt",
+                                      truncation=True, max_length=self.max_input_tokens).to(self.device)
+        streamer = TextIteratorStreamer(self.tokenizer, skip_prompt=True, skip_special_tokens=True)
+        gen_kwargs = dict(**model_inputs, max_new_tokens=self.max_new_tokens, do_sample=False,
+                          pad_token_id=self.tokenizer.eos_token_id, streamer=streamer)
+
+        def _gen():
+            with torch.no_grad():
+                self.model.generate(**gen_kwargs)
+
+        thread = Thread(target=_gen)
+        thread.start()
+        acc = ""
+        try:
+            for token in streamer:
+                acc += token
+                yield acc, sources
+        finally:
+            thread.join()
+            if self.device == "cuda":
+                del model_inputs
+                gc.collect()
+                torch.cuda.empty_cache()
 
     def cleanup(self):
         """Очистка ресурсов (опционально)"""
