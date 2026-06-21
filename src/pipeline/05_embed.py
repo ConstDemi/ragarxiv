@@ -5,8 +5,8 @@
 (SentenceTransformer, bf16, L2-normalize) и сохраняет
 data/processed/all_chunks_with_embeddings.parquet (+ колонка embedding).
 
-NB: эмбеддится поле `text` (как в исходном ноутбуке), НЕ `embed_text`.
-Поведение сохранено намеренно — это снимок системы, на которой мерился baseline.
+По умолчанию эмбеддится поле `text` (baseline). `--text-field embed_text` — вариант
+с контекстом заголовков секции (A/B по ранжированию); меняется только вектор, payload.text остаётся.
 
 Запуск:
     python src/pipeline/05_embed.py
@@ -33,6 +33,8 @@ def main():
                     default=DATA / "processed" / "all_chunks_with_embeddings.parquet")
     ap.add_argument("--batch-size", type=int, default=32)
     ap.add_argument("--device", default="cuda")
+    ap.add_argument("--text-field", default="text", choices=["text", "embed_text"],
+                    help="какое поле эмбедить (A/B: text vs embed_text)")
     ap.add_argument("--limit", type=int, default=None)
     args = ap.parse_args()
 
@@ -43,11 +45,13 @@ def main():
         tokenizer_kwargs={"padding_side": "left"},
     )
 
+    field = args.text_field
+    print(f"Эмбедим поле: {field}")
+
     def compute_embeddings(batch):
-        # NB: кодируем `text`, не `embed_text` — как в исходном ноутбуке.
         embeddings = model.encode(
-            batch["text"],
-            batch_size=len(batch["text"]),
+            batch[field],
+            batch_size=len(batch[field]),
             convert_to_numpy=True,
             normalize_embeddings=True,
             show_progress_bar=False,

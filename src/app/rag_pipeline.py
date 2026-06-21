@@ -14,7 +14,7 @@ logger = logging.getLogger(__name__)
 # Дефолтный системный промпт — используется, если не передан явно (например, из ноутбуков).
 # Для API источник правды — config.SYSTEM_PROMPT, он передаётся в конструктор из main.py.
 DEFAULT_SYSTEM_PROMPT = (
-    "You are a helpful scientific assistant with knowledge base of NLP arxiv paper for 2025 year. "
+    "You are a helpful scientific assistant with knowledge base of NLP arxiv papers from 2021-2026. "
     "Use ONLY the provided context to answer the user's question. "
     "If the context doesn't contain enough information, say so explicitly"
 )
@@ -24,7 +24,7 @@ class ScienceRAG:
     def __init__(self, 
                  qdrant_host: str = "localhost", 
                  qdrant_port: int = 6333,
-                 collection_name: str = "nlp2025_chunks",
+                 collection_name: str = "nlp2021_2026_chunks",
                  embed_model: str = "Qwen/Qwen3-Embedding-0.6B",
                  llm_model: str = "Qwen/Qwen2.5-3B-Instruct",
                  system_prompt: str = DEFAULT_SYSTEM_PROMPT,

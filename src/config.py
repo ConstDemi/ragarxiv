@@ -12,7 +12,7 @@ MAX_PAPERS = 8     # сколько статей максимум возвращ
 # --- Qdrant ---
 QDRANT_HOST = "localhost"
 QDRANT_PORT = 6333
-COLLECTION_NAME = "nlp2025_chunks"
+COLLECTION_NAME = "nlp2021_2026_chunks"
 VECTOR_SIZE = 1024     # размерность Qwen3-Embedding-0.6B; для создания коллекции (pipeline/06)
 
 # --- Models ---
@@ -21,14 +21,14 @@ LLM_MODEL = "Qwen/Qwen2.5-7B-Instruct"   # 7B 4-bit — выбран по eval: 
 
 # --- Generation ---
 MAX_NEW_TOKENS = 2000    # максимальная длина ответа (в токенах)
-MAX_INPUT_TOKENS = 4096  # предел токенов на вход (контекст обрезается)
+MAX_INPUT_TOKENS = 8192  # предел токенов на вход; согласован с бюджетом context_k×chunk_size (10×512), чтобы все чанки доходили до LLM. Qwen2.5-7B держит 32K — это наш кап, не лимит модели
 
 # Baseline-промпт (дефолт). Промпт-ось на 7B исчерпана и закрыта:
 #   prompt-grounded-v2 (4 правила блоком) → регресс (faithfulness 0.83→0.70, over-refusal + дрейф языка);
 #   prompt-lang-v2 (клауза языка)          → ноль (relevancy +0.005, англ 9→8).
 # Вывод: 7B плохо слушает нюансы системного промпта → правки промпта не ведём. Детали — раны в MLflow.
 SYSTEM_PROMPT = (
-    "You are a helpful scientific assistant with knowledge base of NLP arxiv paper for 2025 year. "
+    "You are a helpful scientific assistant with knowledge base of NLP arxiv papers from 2021-2026. "
     "Use ONLY the provided context to answer the user's question. "
     "If the context doesn't contain enough information, say so explicitly"
 )

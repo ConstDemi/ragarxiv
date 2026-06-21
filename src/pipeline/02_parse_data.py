@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Стадия 02 — загрузка HTML статей + упаковка в parquet-шарды.
 
-Читает метаданные, фильтрует по году (default 2025), асинхронно качает HTML
+Читает метаданные, фильтрует по диапазону лет (default 2021–2026), асинхронно качает HTML
 (export.arxiv.org → ar5iv fallback, burst + backoff) в data/raw/html/, затем
 пакует .html в шарды data/raw/parquet/shard_XXXX.parquet (doc_id, html).
 Отчёт об ошибках → data/metadata/download_errors.csv.
@@ -10,6 +10,7 @@
     python src/pipeline/02_parse_data.py                # всё: download + shard
     python src/pipeline/02_parse_data.py --limit 3      # смоук: 3 статьи
     python src/pipeline/02_parse_data.py --stage shard  # только упаковка
+    python src/pipeline/02_parse_data.py --year-min 2021 --year-max 2026   # весь корпус 2021–2026
 """
 import argparse
 import asyncio
@@ -34,10 +35,12 @@ MAX_RETRIES = 3
 
 
 def get_urls(arxiv_id):
-    """Приоритет: export.arxiv.org (рекомендуемый для ботов) → ar5iv (fallback)."""
+    """Приоритет: ar5iv (LaTeXML-HTML, покрывает весь диапазон 2021–2026) →
+    arxiv.org/html (нативный, для свежих статей, которых нет на ar5iv).
+    export.arxiv.org убран: он 429-ит и не отдаёт HTML (только холостой backoff)."""
     return [
-        f"https://export.arxiv.org/html/{arxiv_id}",
         f"https://ar5iv.labs.arxiv.org/html/{arxiv_id}",
+        f"https://arxiv.org/html/{arxiv_id}",
     ]
 
 
@@ -121,13 +124,14 @@ def main():
     ap = argparse.ArgumentParser(description="Загрузка HTML arXiv + упаковка в parquet-шарды.")
     ap.add_argument("--metadata", type=Path,
                     default=DATA / "metadata" / "arxiv_NLP_2021_2026_metadata.csv")
-    ap.add_argument("--year", type=int, default=2025, help="Год для фильтра (default: 2025)")
+    ap.add_argument("--year-min", type=int, default=2021, help="Нижняя граница года (default: 2021)")
+    ap.add_argument("--year-max", type=int, default=2026, help="Верхняя граница года (default: 2026)")
     ap.add_argument("--html-dir", type=Path, default=DATA / "raw" / "html")
     ap.add_argument("--parquet-dir", type=Path, default=DATA / "raw" / "parquet")
     ap.add_argument("--limit", type=int, default=None, help="Ограничить число статей (смоук)")
     ap.add_argument("--shard-size", type=int, default=1000)
-    ap.add_argument("--burst-size", type=int, default=4)
-    ap.add_argument("--burst-pause", type=float, default=1.0)
+    ap.add_argument("--burst-size", type=int, default=8)
+    ap.add_argument("--burst-pause", type=float, default=0.5)
     ap.add_argument("--stage", choices=["all", "download", "shard"], default="all")
     args = ap.parse_args()
 
@@ -136,12 +140,13 @@ def main():
     if args.stage in ("all", "download"):
         df = pd.read_csv(args.metadata, usecols=["arxiv_id", "title", "published", "html_url"])
         df["published"] = pd.to_datetime(df["published"])
-        df_year = df[df["published"].dt.year == args.year]
+        years = df["published"].dt.year
+        df_year = df[(years >= args.year_min) & (years <= args.year_max)]
         downloaded = {f.stem for f in args.html_dir.glob("*.html")}
         ids = [x for x in df_year["arxiv_id"] if x not in downloaded]
         if args.limit:
             ids = ids[:args.limit]
-        print(f"Статей за {args.year}: {len(df_year)} | уже скачано: {len(downloaded)} | "
+        print(f"Статей {args.year_min}–{args.year_max}: {len(df_year)} | уже скачано: {len(downloaded)} | "
               f"к загрузке: {len(ids)}")
         if ids:
             failed = asyncio.run(download_all(ids, args.html_dir, args.burst_size, args.burst_pause))
