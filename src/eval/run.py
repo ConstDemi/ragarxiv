@@ -6,6 +6,10 @@ import os
 # ДО любого импорта (mlflow тянет torch раньше rag_pipeline) → флаг точно активен; меньше
 # фрагментации VRAM и ползучего OOM на длинной серии генераций на 8 ГБ.
 os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
+# Лимит конкурентности судьи MLflow — чтобы не превышать ITPM Anthropic. Без него самый
+# дорогой scorer (retrieval_relevance, ~вызов на чанк) отваливался по rate-limit (валидно 33/50).
+os.environ.setdefault("MLFLOW_GENAI_EVAL_MAX_WORKERS", "2")
+os.environ.setdefault("MLFLOW_GENAI_EVAL_MAX_SCORER_WORKERS", "2")
 
 import sys
 import logging
